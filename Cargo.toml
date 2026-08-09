@@ -4,4 +4,10 @@ resolver = "3"
 members = [
     "prototypes/audio",
     "prototypes/hotkey",
+    "crates/engine",
+    "crates/audio",
+    "crates/win",
+    "crates/stt-pulse",
+    "crates/cleanup",
+    "crates/voice-command",
 ]
