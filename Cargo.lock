@@ -761,6 +761,9 @@ dependencies = [
 [[package]]
 name = "win"
 version = "0.1.0"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "winapi-util"
