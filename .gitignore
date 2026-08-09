@@ -1,0 +1,15 @@
+# Rust
+target/
+**/target/
+
+# Audio/debug artifacts
+*.wav
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.idea/
