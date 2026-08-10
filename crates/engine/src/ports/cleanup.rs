@@ -1,6 +1,6 @@
-use super::stt::Transcript;
+use super::Transcript;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanedText {
     pub text: String,
 }
@@ -10,6 +10,6 @@ pub trait TextCleaner {
 
     fn clean(
         &self,
-        transcript: Transcript,
-    ) -> impl std::future::Future<Output = Result<CleanedText, Self::Error>> + Send;
+        transcript: &Transcript,
+    ) -> Result<CleanedText, Self::Error>;
 }

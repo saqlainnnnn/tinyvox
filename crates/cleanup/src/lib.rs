@@ -1,14 +1,20 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+use tinyvox_engine::ports::{
+    CleanedText,
+    TextCleaner,
+    Transcript,
+};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct BasicCleaner;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl TextCleaner for BasicCleaner {
+    type Error = std::convert::Infallible;
+
+    fn clean(
+        &self,
+        transcript: &Transcript,
+    ) -> Result<CleanedText, Self::Error> {
+        Ok(CleanedText {
+            text: transcript.text.trim().to_string(),
+        })
     }
 }

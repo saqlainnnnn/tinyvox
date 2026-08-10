@@ -1,4 +1,5 @@
 use audio::CpalAudioRecorder;
+use cleanup::BasicCleaner;
 use stt_pulse::PulseClient;
 use tinyvox_engine::controller::TinyVoxController;
 use win::{HotkeyEvent, WindowsHotkey};
@@ -15,9 +16,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hotkey = WindowsHotkey::new()?;
     let recorder = CpalAudioRecorder::new()?;
     let pulse = PulseClient::from_env()?;
+    let cleaner = BasicCleaner;
 
     let mut controller =
-        TinyVoxController::new(recorder, pulse);
+        TinyVoxController::new(
+            recorder,
+            pulse,
+            cleaner,
+        );
 
     let runtime = tokio::runtime::Runtime::new()?;
 
@@ -32,12 +38,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             HotkeyEvent::Released => {
                 println!("🧠 Transcribing...");
 
-                let transcript = runtime.block_on(
-                    controller.stop_recording()
-                )?;
+                let cleaned_text =
+                    runtime.block_on(
+                        controller.stop_recording(),
+                    )?;
 
-                println!("✓ Transcript:");
-                println!("  {}", transcript.text);
+                println!("✓ Cleaned text:");
+                println!("{}", cleaned_text.text);
             }
         }
     }
