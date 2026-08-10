@@ -1,8 +1,11 @@
 use audio::CpalAudioRecorder;
+use stt_pulse::PulseClient;
 use tinyvox_engine::controller::TinyVoxController;
 use win::{HotkeyEvent, WindowsHotkey};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
     println!("TinyVox");
     println!("=======");
     println!("Hold F9 to record.");
@@ -11,8 +14,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let hotkey = WindowsHotkey::new()?;
     let recorder = CpalAudioRecorder::new()?;
+    let pulse = PulseClient::from_env()?;
 
-    let mut controller = TinyVoxController::new(recorder);
+    let mut controller =
+        TinyVoxController::new(recorder, pulse);
+
+    let runtime = tokio::runtime::Runtime::new()?;
 
     loop {
         match hotkey.recv()? {
@@ -23,17 +30,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             HotkeyEvent::Released => {
-                let audio = controller.stop_recording()?;
+                println!("🧠 Transcribing...");
 
-                let duration =
-                    audio.samples.len() as f32 / audio.sample_rate as f32;
+                let transcript = runtime.block_on(
+                    controller.stop_recording()
+                )?;
 
-                println!(
-                    "✓ Captured {} samples @ {} Hz ({:.2}s)",
-                    audio.samples.len(),
-                    audio.sample_rate,
-                    duration
-                );
+                println!("✓ Transcript:");
+                println!("  {}", transcript.text);
             }
         }
     }
