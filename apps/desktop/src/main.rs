@@ -2,7 +2,7 @@ use audio::CpalAudioRecorder;
 use cleanup::BasicCleaner;
 use stt_pulse::PulseClient;
 use tinyvox_engine::controller::TinyVoxController;
-use win::{HotkeyEvent, WindowsHotkey};
+use win::{HotkeyEvent, WindowsHotkey, WindowsTextInjector};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
@@ -17,13 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = CpalAudioRecorder::new()?;
     let pulse = PulseClient::from_env()?;
     let cleaner = BasicCleaner;
+    let injector = WindowsTextInjector::new();
 
-    let mut controller =
-        TinyVoxController::new(
-            recorder,
-            pulse,
-            cleaner,
-        );
+    let mut controller = TinyVoxController::new(
+        recorder,
+        pulse,
+        cleaner,
+        injector,
+    );
 
     let runtime = tokio::runtime::Runtime::new()?;
 
@@ -38,13 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             HotkeyEvent::Released => {
                 println!("🧠 Transcribing...");
 
-                let cleaned_text =
-                    runtime.block_on(
-                        controller.stop_recording(),
-                    )?;
+                runtime.block_on(
+                    controller.stop_recording(),
+                )?;
 
-                println!("✓ Cleaned text:");
-                println!("{}", cleaned_text.text);
+                println!("✓ Injected.");
             }
         }
     }

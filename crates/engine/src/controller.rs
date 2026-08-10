@@ -5,13 +5,13 @@ use crate::{
         AudioRecorder,
         SpeechToText,
         TextCleaner,
-        Transcript,
+        TextInjector,
     },
     state::AppState,
 };
 
 #[derive(Debug)]
-pub enum ControllerError<RE, SE, CE> {
+pub enum ControllerError<RE, SE, CE, IE> {
     InvalidTransition {
         state: AppState,
         event: AppEvent,
@@ -19,13 +19,15 @@ pub enum ControllerError<RE, SE, CE> {
     Recorder(RE),
     SpeechToText(SE),
     Cleaner(CE),
+    Injector(IE),
 }
 
 impl<
         RE: std::fmt::Display,
         SE: std::fmt::Display,
         CE: std::fmt::Display,
-    > std::fmt::Display for ControllerError<RE, SE, CE>
+        IE: std::fmt::Display,
+    > std::fmt::Display for ControllerError<RE, SE, CE, IE>
 {
     fn fmt(
         &self,
@@ -50,47 +52,57 @@ impl<
             Self::Cleaner(error) => {
                 write!(f, "text cleanup error: {error}")
             }
+
+            Self::Injector(error) => {
+                write!(f, "text injection error: {error}")
+            }
         }
     }
 }
 
-impl<RE, SE, CE> std::error::Error
-    for ControllerError<RE, SE, CE>
+impl<RE, SE, CE, IE> std::error::Error
+    for ControllerError<RE, SE, CE, IE>
 where
     RE: std::error::Error + 'static,
     SE: std::error::Error + 'static,
     CE: std::error::Error + 'static,
+    IE: std::error::Error + 'static,
 {
 }
 
-pub struct TinyVoxController<R, S, C>
+pub struct TinyVoxController<R, S, C, I>
 where
     R: AudioRecorder,
     S: SpeechToText,
     C: TextCleaner,
+    I: TextInjector,
 {
     state: AppState,
     recorder: R,
     speech_to_text: S,
     cleaner: C,
+    injector: I,
 }
 
-impl<R, S, C> TinyVoxController<R, S, C>
+impl<R, S, C, I> TinyVoxController<R, S, C, I>
 where
     R: AudioRecorder,
     S: SpeechToText,
     C: TextCleaner,
+    I: TextInjector,
 {
     pub fn new(
         recorder: R,
         speech_to_text: S,
         cleaner: C,
+        injector: I,
     ) -> Self {
         Self {
             state: AppState::Idle,
             recorder,
             speech_to_text,
             cleaner,
+            injector,
         }
     }
 
@@ -102,7 +114,12 @@ where
         &mut self,
     ) -> Result<
         (),
-        ControllerError<R::Error, S::Error, C::Error>,
+        ControllerError<
+            R::Error,
+            S::Error,
+            C::Error,
+            I::Error,
+        >,
     > {
         let event = AppEvent::RecordingStarted;
 
@@ -128,8 +145,13 @@ where
     pub async fn stop_recording(
         &mut self,
     ) -> Result<
-        CleanedText,
-        ControllerError<R::Error, S::Error, C::Error>,
+        (),
+        ControllerError<
+            R::Error,
+            S::Error,
+            C::Error,
+            I::Error,
+        >,
     > {
         let event = AppEvent::RecordingStopped;
 
@@ -189,14 +211,35 @@ where
 
         self.state = next_state;
 
-        Ok(cleaned_text)
+        self.injector
+            .inject(&cleaned_text)
+            .map_err(ControllerError::Injector)?;
+
+        let event = AppEvent::InjectionCompleted;
+
+        let next_state = self
+            .state
+            .transition(&event)
+            .ok_or_else(|| {
+                ControllerError::InvalidTransition {
+                    state: self.state,
+                    event: event.clone(),
+                }
+            })?;
+
+        self.state = next_state;
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::AudioBuffer;
+    use crate::ports::{
+        AudioBuffer,
+        Transcript,
+    };
 
     struct FakeRecorder {
         recording: bool,
@@ -237,7 +280,8 @@ mod tests {
             );
 
             Ok(Transcript {
-                text: "  hello from TinyVox  ".to_string(),
+                text: "  hello from TinyVox  "
+                    .to_string(),
             })
         }
     }
@@ -252,8 +296,29 @@ mod tests {
             transcript: &Transcript,
         ) -> Result<CleanedText, Self::Error> {
             Ok(CleanedText {
-                text: transcript.text.trim().to_string(),
+                text: transcript
+                    .text
+                    .trim()
+                    .to_string(),
             })
+        }
+    }
+
+    struct FakeInjector;
+
+    impl TextInjector for FakeInjector {
+        type Error = &'static str;
+
+        fn inject(
+            &self,
+            text: &CleanedText,
+        ) -> Result<(), Self::Error> {
+            assert_eq!(
+                text.text,
+                "hello from TinyVox"
+            );
+
+            Ok(())
         }
     }
 
@@ -263,35 +328,36 @@ mod tests {
             recording: false,
         };
 
-        let mut controller = TinyVoxController::new(
-            recorder,
-            FakeSpeechToText,
-            FakeCleaner,
-        );
+        let mut controller =
+            TinyVoxController::new(
+                recorder,
+                FakeSpeechToText,
+                FakeCleaner,
+                FakeInjector,
+            );
 
         assert_eq!(
             controller.state(),
             AppState::Idle
         );
 
-        controller.start_recording().unwrap();
+        controller
+            .start_recording()
+            .unwrap();
 
         assert_eq!(
             controller.state(),
             AppState::Recording
         );
 
-        let cleaned_text =
-            controller.stop_recording().await.unwrap();
+        controller
+            .stop_recording()
+            .await
+            .unwrap();
 
         assert_eq!(
             controller.state(),
-            AppState::Injecting
-        );
-
-        assert_eq!(
-            cleaned_text.text,
-            "hello from TinyVox"
+            AppState::Idle
         );
     }
 
@@ -301,13 +367,17 @@ mod tests {
             recording: false,
         };
 
-        let mut controller = TinyVoxController::new(
-            recorder,
-            FakeSpeechToText,
-            FakeCleaner,
-        );
+        let mut controller =
+            TinyVoxController::new(
+                recorder,
+                FakeSpeechToText,
+                FakeCleaner,
+                FakeInjector,
+            );
 
-        controller.start_recording().unwrap();
+        controller
+            .start_recording()
+            .unwrap();
 
         let result =
             controller.start_recording();

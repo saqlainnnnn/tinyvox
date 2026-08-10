@@ -7,7 +7,10 @@ use clipboard_win::{
     ErrorCode,
 };
 
-use tinyvox_engine::ports::{CleanedText, TextInjector};
+use tinyvox_engine::ports::{
+    CleanedText,
+    TextInjector,
+};
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput,
@@ -37,15 +40,24 @@ impl std::fmt::Display for InjectionError {
     ) -> std::fmt::Result {
         match self {
             Self::ClipboardRead(error) => {
-                write!(f, "failed to read clipboard: {error}")
+                write!(
+                    f,
+                    "failed to read clipboard: {error}"
+                )
             }
 
             Self::ClipboardWrite(error) => {
-                write!(f, "failed to write clipboard: {error}")
+                write!(
+                    f,
+                    "failed to write clipboard: {error}"
+                )
             }
 
             Self::SendInputFailed => {
-                write!(f, "Windows SendInput failed")
+                write!(
+                    f,
+                    "Windows SendInput failed"
+                )
             }
         }
     }
@@ -110,7 +122,9 @@ impl WindowsTextInjector {
         };
 
         if sent != inputs.len() as u32 {
-            return Err(InjectionError::SendInputFailed);
+            return Err(
+                InjectionError::SendInputFailed
+            );
         }
 
         Ok(())
@@ -130,25 +144,37 @@ impl TextInjector for WindowsTextInjector {
         &self,
         text: &CleanedText,
     ) -> Result<(), Self::Error> {
-        let previous_clipboard = get_clipboard_string()
-            .map_err(InjectionError::ClipboardRead)?;
+        let previous_clipboard =
+            get_clipboard_string()
+                .map_err(
+                    InjectionError::ClipboardRead
+                )?;
 
         set_clipboard_string(&text.text)
-            .map_err(InjectionError::ClipboardWrite)?;
+            .map_err(
+                InjectionError::ClipboardWrite
+            )?;
 
-        let injection_result = Self::send_ctrl_v();
+        let injection_result =
+            Self::send_ctrl_v();
 
         /*
-         * SendInput queues the keyboard events. Give the
-         * foreground application a small amount of time
-         * to process Ctrl+V before restoring the clipboard.
+         * SendInput queues the keyboard events.
+         * Give the foreground application a small
+         * amount of time to process Ctrl+V before
+         * restoring the clipboard.
          */
-        thread::sleep(CLIPBOARD_RESTORE_DELAY);
+        thread::sleep(
+            CLIPBOARD_RESTORE_DELAY
+        );
 
-        let restore_result = set_clipboard_string(
-            &previous_clipboard,
-        )
-        .map_err(InjectionError::ClipboardWrite);
+        let restore_result =
+            set_clipboard_string(
+                &previous_clipboard,
+            )
+            .map_err(
+                InjectionError::ClipboardWrite
+            );
 
         injection_result?;
         restore_result?;
