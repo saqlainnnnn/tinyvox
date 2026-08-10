@@ -105,6 +105,8 @@ impl PulseClient {
         &self,
         audio: &AudioBuffer,
     ) -> Result<Transcript, PulseError> {
+        const MAX_ATTEMPTS: usize = 3;
+
         let body = wav_bytes(audio);
 
         let mut url = Url::parse(PULSE_URL)
@@ -114,44 +116,79 @@ impl PulseClient {
             .append_pair("model", "pulse")
             .append_pair("language", &self.language);
 
-        let response = self
-            .client
-            .post(url)
-            .bearer_auth(&self.api_key)
-            .header(
-                "Content-Type",
-                "application/octet-stream",
+        for attempt in 0..MAX_ATTEMPTS {
+            let response = self
+                .client
+                .post(url.clone())
+                .bearer_auth(&self.api_key)
+                .header(
+                    "Content-Type",
+                    "application/octet-stream",
+                )
+                .body(body.clone())
+                .send()
+                .await;
+
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+
+                    if status.is_success() {
+                        let result = response
+                            .json::<PulseResponse>()
+                            .await
+                            .map_err(PulseError::InvalidResponse)?;
+
+                        return Ok(Transcript {
+                            text: result.transcription,
+                        });
+                    }
+
+                    if !is_retryable_status(status)
+                        || attempt + 1 == MAX_ATTEMPTS
+                    {
+                        let body = response
+                            .text()
+                            .await
+                            .map_err(PulseError::Http)?;
+
+                        return Err(PulseError::Api {
+                            status,
+                            body,
+                        });
+                    }
+                }
+
+                Err(error) => {
+                    if attempt + 1 == MAX_ATTEMPTS {
+                        return Err(PulseError::Http(error));
+                    }
+                }
+            }
+
+            let backoff_ms =
+                100 * (1 << attempt);
+
+            tokio::time::sleep(
+                std::time::Duration::from_millis(
+                    backoff_ms,
+                ),
             )
-            .body(body)
-            .send()
-            .await
-            .map_err(PulseError::Http)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-
-            let body = response
-                .text()
-                .await
-                .map_err(PulseError::Http)?;
-
-            return Err(PulseError::Api {
-                status,
-                body,
-            });
+            .await;
         }
 
-        let result = response
-            .json::<PulseResponse>()
-            .await
-            .map_err(PulseError::InvalidResponse)?;
-
-        Ok(Transcript {
-            text: result.transcription,
-        })
+        unreachable!()
     }
 }
 
+    fn is_retryable_status(
+        status: reqwest::StatusCode,
+    ) -> bool {
+        status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status.is_server_error()
+    }
+    
 impl SpeechToText for PulseClient {
     type Error = PulseError;
 

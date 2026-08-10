@@ -9,5 +9,5 @@ dotenvy = "0.15.7"
 reqwest = { version = "0.13.4", features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tinyvox-engine = { version = "0.1.0", path = "../engine" }
-tokio = { version = "1.53.1", features = ["rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 url = "2.5.7"
