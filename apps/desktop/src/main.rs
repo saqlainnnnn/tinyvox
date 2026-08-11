@@ -7,6 +7,7 @@ use cleanup::{
 use stt_pulse::PulseClient;
 use tinyvox_engine::{
     controller::TinyVoxController,
+    dictionary::Dictionary,
     state::AppState,
 };
 use win::{
@@ -45,10 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let overlay = WindowsOverlay::new()?;
 
+    let dictionary = Dictionary::new();
+
     let mut controller =
         TinyVoxController::new(
             recorder,
             speech_to_text,
+            dictionary,
             cleaner,
             injector,
         );
@@ -91,15 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 controller.start_recording()?;
 
-                println!(
-                    "🎙️ Recording..."
-                );
+                println!("🎙️ Recording...");
             }
 
             HotkeyEvent::Released => {
-                println!(
-                    "🧠 Transcribing..."
-                );
+                println!("🧠 Transcribing...");
 
                 runtime.block_on(
                     controller.stop_recording(
@@ -141,9 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         window.process_name
                     );
                 } else {
-                    println!(
-                        "✓ Injected."
-                    );
+                    println!("✓ Injected.");
                 }
             }
         }

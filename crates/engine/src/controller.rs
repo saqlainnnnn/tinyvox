@@ -1,10 +1,13 @@
 use crate::{
+    dictionary::Dictionary,
     event::AppEvent,
     ports::{
         AudioRecorder,
+        CleanedText,
         SpeechToText,
         TextCleaner,
         TextInjector,
+        Transcript,
     },
     state::AppState,
 };
@@ -79,6 +82,7 @@ where
     state: AppState,
     recorder: R,
     speech_to_text: S,
+    dictionary: Dictionary,
     cleaner: C,
     injector: I,
 }
@@ -93,6 +97,7 @@ where
     pub fn new(
         recorder: R,
         speech_to_text: S,
+        dictionary: Dictionary,
         cleaner: C,
         injector: I,
     ) -> Self {
@@ -100,6 +105,7 @@ where
             state: AppState::Idle,
             recorder,
             speech_to_text,
+            dictionary,
             cleaner,
             injector,
         }
@@ -188,6 +194,14 @@ where
             .await
             .map_err(ControllerError::SpeechToText)?;
 
+        // Apply dictionary corrections
+        let corrected_text =
+            self.dictionary.apply(&transcript.text);
+
+        let transcript = Transcript {
+            text: corrected_text,
+        };
+
         // Transcribing → Cleaning
         let event = AppEvent::TranscriptionCompleted;
 
@@ -255,10 +269,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{
-        AudioBuffer,
-        CleanedText,
-        Transcript,
+    use crate::{
+        dictionary::EntrySource,
+        ports::{
+            AudioBuffer,
+            CleanedText,
+            Transcript,
+        },
+    };
+    use std::sync::{
+        Arc,
+        Mutex,
     };
 
     struct FakeRecorder {
@@ -308,7 +329,25 @@ mod tests {
         }
     }
 
-    struct FakeCleaner;
+    struct DictionarySpeechToText;
+
+    impl SpeechToText for DictionarySpeechToText {
+        type Error = &'static str;
+
+        async fn transcribe(
+            &self,
+            _audio: &AudioBuffer,
+        ) -> Result<Transcript, Self::Error> {
+            Ok(Transcript {
+                text: "I use Kubernets every day."
+                    .to_string(),
+            })
+        }
+    }
+
+    struct FakeCleaner {
+        received: Arc<Mutex<Option<String>>>,
+    }
 
     impl TextCleaner for FakeCleaner {
         type Error = &'static str;
@@ -322,12 +361,18 @@ mod tests {
                 Self::Error,
             >,
         > + Send {
+            let received =
+                self.received.clone();
+
+            let text =
+                transcript.text.clone();
+
             async move {
+                *received.lock().unwrap() =
+                    Some(text.clone());
+
                 Ok(CleanedText {
-                    text: transcript
-                        .text
-                        .trim()
-                        .to_string(),
+                    text: text.trim().to_string(),
                 })
             }
         }
@@ -346,13 +391,8 @@ mod tests {
 
         fn inject(
             &self,
-            text: &CleanedText,
+            _text: &CleanedText,
         ) -> Result<(), Self::Error> {
-            assert_eq!(
-                text.text,
-                "hello from TinyVox"
-            );
-
             Ok(())
         }
     }
@@ -367,7 +407,12 @@ mod tests {
             TinyVoxController::new(
                 recorder,
                 FakeSpeechToText,
-                FakeCleaner,
+                Dictionary::new(),
+                FakeCleaner {
+                    received: Arc::new(
+                        Mutex::new(None),
+                    ),
+                },
                 FakeInjector,
             );
 
@@ -406,7 +451,12 @@ mod tests {
             TinyVoxController::new(
                 recorder,
                 FakeSpeechToText,
-                FakeCleaner,
+                Dictionary::new(),
+                FakeCleaner {
+                    received: Arc::new(
+                        Mutex::new(None),
+                    ),
+                },
                 FakeInjector,
             );
 
@@ -426,5 +476,53 @@ mod tests {
                 }
             )
         ));
+    }
+
+    #[tokio::test]
+    async fn dictionary_correction_reaches_cleaner() {
+        let recorder = FakeRecorder {
+            recording: false,
+        };
+
+        let received =
+            Arc::new(
+                Mutex::new(None),
+            );
+
+        let cleaner = FakeCleaner {
+            received: received.clone(),
+        };
+
+        let mut dictionary =
+            Dictionary::new();
+
+        dictionary.add(
+            "kubernets",
+            "Kubernetes",
+            EntrySource::Manual,
+        );
+
+        let mut controller =
+            TinyVoxController::new(
+                recorder,
+                DictionarySpeechToText,
+                dictionary,
+                cleaner,
+                FakeInjector,
+            );
+
+        controller
+            .start_recording()
+            .unwrap();
+
+        controller
+            .stop_recording(|_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(
+            received.lock().unwrap().as_deref(),
+            Some("I use Kubernetes every day.")
+        );
     }
 }
