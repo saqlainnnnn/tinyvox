@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use tinyvox_engine::ports::{
     CleanedText,
     TextCleaner,
@@ -109,6 +111,25 @@ where
 
         CleanedText {
             text: transcript.text.trim().to_string(),
+        }
+    }
+}
+
+impl<P, F> TextCleaner for CleanupPipeline<P, F>
+where
+    P: TextCleaner + Sync,
+    F: TextCleaner + Sync,
+{
+    type Error = Infallible;
+
+    fn clean(
+        &self,
+        transcript: &Transcript,
+    ) -> impl std::future::Future<
+        Output = Result<CleanedText, Self::Error>,
+    > + Send {
+        async move {
+            Ok(self.clean(transcript).await)
         }
     }
 }
