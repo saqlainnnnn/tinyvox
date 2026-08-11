@@ -2,7 +2,6 @@ use crate::{
     event::AppEvent,
     ports::{
         AudioRecorder,
-        CleanedText,
         SpeechToText,
         TextCleaner,
         TextInjector,
@@ -258,6 +257,7 @@ mod tests {
     use super::*;
     use crate::ports::{
         AudioBuffer,
+        CleanedText,
         Transcript,
     };
 
@@ -339,7 +339,7 @@ mod tests {
         type Error = std::io::Error;
 
         fn prepare(
-            &self,
+            &mut self,
         ) -> Result<(), Self::Error> {
             Ok(())
         }
