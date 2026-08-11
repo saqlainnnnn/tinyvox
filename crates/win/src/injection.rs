@@ -12,16 +12,26 @@ use tinyvox_engine::ports::{
     TextInjector,
 };
 
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput,
-    INPUT,
-    INPUT_0,
-    INPUT_KEYBOARD,
-    KEYBDINPUT,
-    KEYEVENTF_KEYUP,
-    VK_CONTROL,
-    VK_V,
+use windows::Win32::{
+    Foundation::HWND,
+    UI::{
+        Input::KeyboardAndMouse::{
+            SendInput,
+            INPUT,
+            INPUT_0,
+            INPUT_KEYBOARD,
+            KEYBDINPUT,
+            KEYEVENTF_KEYUP,
+            VK_CONTROL,
+            VK_V,
+        },
+        WindowsAndMessaging::{
+            SetForegroundWindow,
+        },
+    },
 };
+
+use crate::foreground::WindowsForeground;
 
 const CLIPBOARD_RESTORE_DELAY: Duration =
     Duration::from_millis(50);
@@ -31,6 +41,7 @@ pub enum InjectionError {
     ClipboardRead(ErrorCode),
     ClipboardWrite(ErrorCode),
     SendInputFailed,
+    ForegroundUnavailable,
 }
 
 impl std::fmt::Display for InjectionError {
@@ -59,17 +70,37 @@ impl std::fmt::Display for InjectionError {
                     "Windows SendInput failed"
                 )
             }
+            Self::ForegroundUnavailable => {
+                write!(
+                    f,
+                    "failed to capture foreground window"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for InjectionError {}
 
-pub struct WindowsTextInjector;
+
+pub struct WindowsTextInjector {
+    target: Option<HWND>,
+}
 
 impl WindowsTextInjector {
     pub fn new() -> Self {
-        Self
+        Self{
+            target : None,
+        }
+    }
+    pub fn set_target(
+        &mut self,
+        target: HWND,
+    ) {
+        self.target = Some(target);
+    }
+    pub fn clear_target(&mut self) {
+        self.target = None;
     }
 
     fn send_ctrl_v() -> Result<(), InjectionError> {
@@ -144,6 +175,16 @@ impl TextInjector for WindowsTextInjector {
         &self,
         text: &CleanedText,
     ) -> Result<(), Self::Error> {
+
+        if let Some(hwnd) = self.target {
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+
+        let previous_clipboard = get_clipboard_string()
+            .map_err(InjectionError::ClipboardRead)?;
+
         let previous_clipboard =
             get_clipboard_string()
                 .map_err(
@@ -178,6 +219,18 @@ impl TextInjector for WindowsTextInjector {
 
         injection_result?;
         restore_result?;
+
+        Ok(())
+    }
+
+    fn prepare(&mut self) -> Result<(), Self::Error> {
+        let foreground = WindowsForeground::new();
+
+        let window = foreground
+            .get()
+            .map_err(|_| InjectionError::ForegroundUnavailable)?;
+
+        self.target = Some(window.hwnd);
 
         Ok(())
     }

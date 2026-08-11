@@ -92,8 +92,13 @@ where
             )
             .is_ok()
             {
+                println!("✓ Cleanup: primary");
                 return cleaned;
             }
+
+            println!("⚠ Cleanup: primary failed validation");
+        } else {
+            println!("⚠ Cleanup: primary failed");
         }
 
         if let Ok(cleaned) =
@@ -105,10 +110,18 @@ where
             )
             .is_ok()
             {
+                println!("✓ Cleanup: llama fallback");
                 return cleaned;
             }
-        }
 
+            println!(
+            "⚠ Cleanup: llama failed validation"
+        );
+        }   else {
+        println!("⚠ Cleanup: llama unavailable/failed");
+    }
+
+        println!("→ Cleanup: raw transcript fallback");
         CleanedText {
             text: transcript.text.trim().to_string(),
         }

@@ -132,6 +132,9 @@ where
                     event: event.clone(),
                 }
             })?;
+        self.injector
+            .prepare()
+            .map_err(ControllerError::Injector)?;
 
         self.recorder
             .start()
@@ -314,7 +317,7 @@ mod tests {
     struct FakeInjector;
 
     impl TextInjector for FakeInjector {
-        type Error = &'static str;
+        type Error = std::io::Error;
 
         fn inject(
             &self,

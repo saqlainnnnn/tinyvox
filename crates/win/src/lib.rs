@@ -1,4 +1,11 @@
 pub mod injection;
+pub mod foreground;
+
+pub use foreground::{
+    ForegroundError,
+    ForegroundWindow,
+    WindowsForeground,
+};
 
 pub use injection::{InjectionError, WindowsTextInjector};
 

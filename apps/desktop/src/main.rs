@@ -8,6 +8,7 @@ use stt_pulse::PulseClient;
 use tinyvox_engine::controller::TinyVoxController;
 use win::{
     HotkeyEvent,
+    WindowsForeground,
     WindowsHotkey,
     WindowsTextInjector,
 };
@@ -22,9 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Press Ctrl+C to exit.\n");
 
     let hotkey = WindowsHotkey::new()?;
+    let foreground = WindowsForeground::new();
+
     let recorder = CpalAudioRecorder::new()?;
     let speech_to_text = PulseClient::from_env()?;
-    let injector = WindowsTextInjector::new();
 
     let primary = GroqCleaner::from_env()?;
     let fallback = LocalLlamaCleaner::new();
@@ -33,6 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         primary,
         fallback,
     );
+
+    let injector = WindowsTextInjector::new();
 
     let mut controller =
         TinyVoxController::new(
@@ -44,9 +48,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = tokio::runtime::Runtime::new()?;
 
+    let mut target = None;
+
     loop {
         match hotkey.recv()? {
             HotkeyEvent::Pressed => {
+                let window = foreground.get()?;
+
+                println!(
+                    "🎯 Target: {}",
+                    window.process_name
+                );
+
+                target = Some(window);
+
                 controller.start_recording()?;
 
                 println!("🎙️ Recording...");
@@ -59,7 +74,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     controller.stop_recording(),
                 )?;
 
-                println!("✓ Injected.");
+                if let Some(window) = target.take() {
+                    println!(
+                        "✓ Injected into {}.",
+                        window.process_name
+                    );
+                } else {
+                    println!("✓ Injected.");
+                }
             }
         }
     }
