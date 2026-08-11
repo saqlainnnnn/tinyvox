@@ -1,6 +1,13 @@
 pub mod injection;
 pub mod foreground;
 
+pub mod credentials;
+
+pub use credentials::{
+    CredentialError,
+    WindowsCredentials,
+};
+
 pub use foreground::{
     ForegroundError,
     ForegroundWindow,
