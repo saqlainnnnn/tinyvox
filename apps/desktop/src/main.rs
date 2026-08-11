@@ -8,8 +8,10 @@ use stt_pulse::PulseClient;
 use tinyvox_engine::controller::TinyVoxController;
 use win::{
     HotkeyEvent,
+    OverlayState,
     WindowsForeground,
     WindowsHotkey,
+    WindowsOverlay,
     WindowsTextInjector,
 };
 
@@ -38,6 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let injector = WindowsTextInjector::new();
 
+    let overlay = WindowsOverlay::new()?;
+
     let mut controller =
         TinyVoxController::new(
             recorder,
@@ -62,17 +66,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 target = Some(window);
 
+                overlay.set_state(
+                    OverlayState::Recording,
+                );
+                overlay.show();
+
                 controller.start_recording()?;
 
                 println!("🎙️ Recording...");
             }
 
             HotkeyEvent::Released => {
+                overlay.set_state(
+                    OverlayState::Transcribing,
+                );
+
                 println!("🧠 Transcribing...");
 
                 runtime.block_on(
                     controller.stop_recording(),
                 )?;
+
+                overlay.hide();
 
                 if let Some(window) = target.take() {
                     println!(

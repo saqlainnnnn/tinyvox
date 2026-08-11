@@ -3,6 +3,14 @@ pub mod foreground;
 
 pub mod credentials;
 
+pub mod overlay;
+
+pub use overlay::{
+    OverlayError,
+    WindowsOverlay,
+    OverlayState,
+};
+
 pub use credentials::{
     CredentialError,
     WindowsCredentials,
