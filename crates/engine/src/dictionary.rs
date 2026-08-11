@@ -30,6 +30,20 @@ impl Dictionary {
         }
     }
 
+    pub(crate) fn from_entries(
+        entries: Vec<DictionaryEntry>,
+        next_id: u64,
+    ) -> Self {
+        Self {
+            entries,
+            next_id,
+        }
+    }
+
+    pub(crate) fn next_id(&self) -> u64 {
+        self.next_id
+    }
+
     pub fn apply(
         &mut self,
         transcript: &str,
@@ -91,6 +105,26 @@ impl Dictionary {
 
         self.entries.len()
             != original_len
+    }
+
+    pub fn edit(
+        &mut self,
+        id: EntryId,
+        wrong: &str,
+        correct: &str,
+    ) -> bool {
+        if let Some(entry) =
+            self.entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+        {
+            entry.wrong = wrong.to_string();
+            entry.correct = correct.to_string();
+
+            true
+        } else {
+            false
+        }
     }
 
     pub fn entries(

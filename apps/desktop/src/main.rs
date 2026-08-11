@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use audio::CpalAudioRecorder;
 use cleanup::{
     CleanupPipeline,
@@ -7,7 +9,7 @@ use cleanup::{
 use stt_pulse::PulseClient;
 use tinyvox_engine::{
     controller::TinyVoxController,
-    dictionary::Dictionary,
+    dictionary_store::DictionaryStore,
     state::AppState,
 };
 use win::{
@@ -46,7 +48,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let overlay = WindowsOverlay::new()?;
 
-    let dictionary = Dictionary::new();
+    let dictionary_path = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or("APPDATA environment variable is not available")?
+        .join("TinyVox")
+        .join("dictionary.json");
+
+    let dictionary_store =
+        DictionaryStore::new(dictionary_path);
+
+    let dictionary =
+        dictionary_store.load()?;
 
     let mut controller =
         TinyVoxController::new(
@@ -95,11 +107,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 controller.start_recording()?;
 
-                println!("🎙️ Recording...");
+                println!(
+                    "🎙️ Recording..."
+                );
             }
 
             HotkeyEvent::Released => {
-                println!("🧠 Transcribing...");
+                println!(
+                    "🧠 Transcribing..."
+                );
 
                 runtime.block_on(
                     controller.stop_recording(
@@ -141,7 +157,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         window.process_name
                     );
                 } else {
-                    println!("✓ Injected.");
+                    println!(
+                        "✓ Injected."
+                    );
                 }
             }
         }
