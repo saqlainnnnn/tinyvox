@@ -61,6 +61,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match hotkey.recv()? {
             HotkeyEvent::Pressed => {
+                if controller.state().is_busy() {
+                    println!("⚠ TinyVox is busy.");
+
+                    overlay.set_state(
+                        OverlayState::Busy,
+                    );
+
+                    overlay.show();
+
+                    continue;
+                }
+
                 let window =
                     foreground.get()?;
 

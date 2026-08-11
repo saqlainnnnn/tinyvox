@@ -81,6 +81,7 @@ pub enum OverlayState {
     Transcribing,
     Cleaning,
     Injecting,
+    Busy,
 }
 
 impl OverlayState {
@@ -90,6 +91,7 @@ impl OverlayState {
             Self::Transcribing => "Transcribing",
             Self::Cleaning => "Cleaning",
             Self::Injecting => "Injecting",
+            Self::Busy => "Busy",
         }
     }
 
@@ -99,6 +101,7 @@ impl OverlayState {
             Self::Transcribing => 1,
             Self::Cleaning => 2,
             Self::Injecting => 3,
+            Self::Busy => 4,
         }
     }
 
@@ -108,6 +111,7 @@ impl OverlayState {
             1 => Some(Self::Transcribing),
             2 => Some(Self::Cleaning),
             3 => Some(Self::Injecting),
+            4 => Some(Self::Busy),
             _ => None,
         }
     }
