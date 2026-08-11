@@ -5,7 +5,10 @@ use cleanup::{
     LocalLlamaCleaner,
 };
 use stt_pulse::PulseClient;
-use tinyvox_engine::controller::TinyVoxController;
+use tinyvox_engine::{
+    controller::TinyVoxController,
+    state::AppState,
+};
 use win::{
     HotkeyEvent,
     OverlayState,
@@ -50,14 +53,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             injector,
         );
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime =
+        tokio::runtime::Runtime::new()?;
 
     let mut target = None;
 
     loop {
         match hotkey.recv()? {
             HotkeyEvent::Pressed => {
-                let window = foreground.get()?;
+                let window =
+                    foreground.get()?;
 
                 println!(
                     "🎯 Target: {}",
@@ -69,33 +74,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 overlay.set_state(
                     OverlayState::Recording,
                 );
+
                 overlay.show();
 
                 controller.start_recording()?;
 
-                println!("🎙️ Recording...");
+                println!(
+                    "🎙️ Recording..."
+                );
             }
 
             HotkeyEvent::Released => {
-                overlay.set_state(
-                    OverlayState::Transcribing,
+                println!(
+                    "🧠 Transcribing..."
                 );
 
-                println!("🧠 Transcribing...");
-
                 runtime.block_on(
-                    controller.stop_recording(),
+                    controller.stop_recording(
+                        |state| {
+                            match state {
+                                AppState::Transcribing => {
+                                    overlay.set_state(
+                                        OverlayState::Transcribing,
+                                    );
+                                }
+
+                                AppState::Cleaning => {
+                                    overlay.set_state(
+                                        OverlayState::Cleaning,
+                                    );
+                                }
+
+                                AppState::Injecting => {
+                                    overlay.set_state(
+                                        OverlayState::Injecting,
+                                    );
+                                }
+
+                                AppState::Idle => {
+                                    overlay.hide();
+                                }
+
+                                _ => {}
+                            }
+                        },
+                    ),
                 )?;
 
-                overlay.hide();
-
-                if let Some(window) = target.take() {
+                if let Some(window) =
+                    target.take()
+                {
                     println!(
                         "✓ Injected into {}.",
                         window.process_name
                     );
                 } else {
-                    println!("✓ Injected.");
+                    println!(
+                        "✓ Injected."
+                    );
                 }
             }
         }

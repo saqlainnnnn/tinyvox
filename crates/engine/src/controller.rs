@@ -23,11 +23,11 @@ pub enum ControllerError<RE, SE, CE, IE> {
 }
 
 impl<
-        RE: std::fmt::Display,
-        SE: std::fmt::Display,
-        CE: std::fmt::Display,
-        IE: std::fmt::Display,
-    > std::fmt::Display for ControllerError<RE, SE, CE, IE>
+    RE: std::fmt::Display,
+    SE: std::fmt::Display,
+    CE: std::fmt::Display,
+    IE: std::fmt::Display,
+> std::fmt::Display for ControllerError<RE, SE, CE, IE>
 {
     fn fmt(
         &self,
@@ -132,6 +132,7 @@ where
                     event: event.clone(),
                 }
             })?;
+
         self.injector
             .prepare()
             .map_err(ControllerError::Injector)?;
@@ -145,8 +146,9 @@ where
         Ok(())
     }
 
-    pub async fn stop_recording(
+    pub async fn stop_recording<F>(
         &mut self,
+        on_state_change: F,
     ) -> Result<
         (),
         ControllerError<
@@ -155,7 +157,10 @@ where
             C::Error,
             I::Error,
         >,
-    > {
+    >
+    where
+        F: Fn(AppState),
+    {
         // Recording → Transcribing
         let event = AppEvent::RecordingStopped;
 
@@ -175,6 +180,7 @@ where
             .map_err(ControllerError::Recorder)?;
 
         self.state = next_state;
+        on_state_change(self.state);
 
         // Transcribing
         let transcript = self
@@ -197,6 +203,7 @@ where
             })?;
 
         self.state = next_state;
+        on_state_change(self.state);
 
         // Cleaning
         let cleaned_text = self
@@ -205,6 +212,7 @@ where
             .await
             .map_err(ControllerError::Cleaner)?;
 
+        // Cleaning → Injecting
         let event = AppEvent::CleanupCompleted;
 
         let next_state = self
@@ -218,7 +226,9 @@ where
             })?;
 
         self.state = next_state;
+        on_state_change(self.state);
 
+        // Injecting
         self.injector
             .inject(&cleaned_text)
             .map_err(ControllerError::Injector)?;
@@ -237,6 +247,7 @@ where
             })?;
 
         self.state = next_state;
+        on_state_change(self.state);
 
         Ok(())
     }
@@ -257,7 +268,9 @@ mod tests {
     impl AudioRecorder for FakeRecorder {
         type Error = &'static str;
 
-        fn start(&mut self) -> Result<(), Self::Error> {
+        fn start(
+            &mut self,
+        ) -> Result<(), Self::Error> {
             self.recording = true;
             Ok(())
         }
@@ -304,11 +317,17 @@ mod tests {
             &self,
             transcript: &Transcript,
         ) -> impl std::future::Future<
-            Output = Result<CleanedText, Self::Error>,
+            Output = Result<
+                CleanedText,
+                Self::Error,
+            >,
         > + Send {
             async move {
                 Ok(CleanedText {
-                    text: transcript.text.trim().to_string(),
+                    text: transcript
+                        .text
+                        .trim()
+                        .to_string(),
                 })
             }
         }
@@ -318,6 +337,12 @@ mod tests {
 
     impl TextInjector for FakeInjector {
         type Error = std::io::Error;
+
+        fn prepare(
+            &self,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
 
         fn inject(
             &self,
@@ -331,7 +356,7 @@ mod tests {
             Ok(())
         }
     }
-    
+
     #[tokio::test]
     async fn recording_lifecycle_is_managed_by_controller() {
         let recorder = FakeRecorder {
@@ -361,7 +386,7 @@ mod tests {
         );
 
         controller
-            .stop_recording()
+            .stop_recording(|_| {})
             .await
             .unwrap();
 
