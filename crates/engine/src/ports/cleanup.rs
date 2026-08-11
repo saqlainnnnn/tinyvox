@@ -11,5 +11,7 @@ pub trait TextCleaner {
     fn clean(
         &self,
         transcript: &Transcript,
-    ) -> Result<CleanedText, Self::Error>;
+    ) -> impl std::future::Future<
+        Output = Result<CleanedText, Self::Error>,
+    > + Send;
 }

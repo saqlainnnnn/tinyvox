@@ -1,8 +1,8 @@
 use crate::{
     event::AppEvent,
     ports::{
-        CleanedText,
         AudioRecorder,
+        CleanedText,
         SpeechToText,
         TextCleaner,
         TextInjector,
@@ -153,6 +153,7 @@ where
             I::Error,
         >,
     > {
+        // Recording → Transcribing
         let event = AppEvent::RecordingStopped;
 
         let next_state = self
@@ -172,12 +173,14 @@ where
 
         self.state = next_state;
 
+        // Transcribing
         let transcript = self
             .speech_to_text
             .transcribe(&audio)
             .await
             .map_err(ControllerError::SpeechToText)?;
 
+        // Transcribing → Cleaning
         let event = AppEvent::TranscriptionCompleted;
 
         let next_state = self
@@ -192,9 +195,11 @@ where
 
         self.state = next_state;
 
+        // Cleaning
         let cleaned_text = self
             .cleaner
             .clean(&transcript)
+            .await
             .map_err(ControllerError::Cleaner)?;
 
         let event = AppEvent::CleanupCompleted;
@@ -215,6 +220,7 @@ where
             .inject(&cleaned_text)
             .map_err(ControllerError::Injector)?;
 
+        // Injecting → Idle
         let event = AppEvent::InjectionCompleted;
 
         let next_state = self
@@ -294,13 +300,14 @@ mod tests {
         fn clean(
             &self,
             transcript: &Transcript,
-        ) -> Result<CleanedText, Self::Error> {
-            Ok(CleanedText {
-                text: transcript
-                    .text
-                    .trim()
-                    .to_string(),
-            })
+        ) -> impl std::future::Future<
+            Output = Result<CleanedText, Self::Error>,
+        > + Send {
+            async move {
+                Ok(CleanedText {
+                    text: transcript.text.trim().to_string(),
+                })
+            }
         }
     }
 
@@ -321,7 +328,7 @@ mod tests {
             Ok(())
         }
     }
-
+    
     #[tokio::test]
     async fn recording_lifecycle_is_managed_by_controller() {
         let recorder = FakeRecorder {

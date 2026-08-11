@@ -147,7 +147,11 @@ dependencies = [
 name = "cleanup"
 version = "0.1.0"
 dependencies = [
+ "dotenvy",
+ "reqwest",
+ "serde",
  "tinyvox-engine",
+ "tokio",
 ]
 
 [[package]]
