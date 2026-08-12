@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    RwLock,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EntryId(pub u64);
 
@@ -20,6 +25,17 @@ pub struct DictionaryEntry {
 pub struct Dictionary {
     entries: Vec<DictionaryEntry>,
     next_id: u64,
+}
+
+pub type SharedDictionary =
+    Arc<RwLock<Dictionary>>;
+
+pub fn shared() -> SharedDictionary {
+    Arc::new(
+        RwLock::new(
+            Dictionary::new(),
+        ),
+    )
 }
 
 impl Dictionary {
@@ -61,7 +77,8 @@ impl Dictionary {
 
             if replaced != result {
                 entry.hit_count =
-                    entry.hit_count.saturating_add(1);
+                    entry.hit_count
+                        .saturating_add(1);
 
                 result = replaced;
             }
@@ -76,7 +93,9 @@ impl Dictionary {
         correct: &str,
         source: EntrySource,
     ) -> EntryId {
-        let id = EntryId(self.next_id);
+        let id =
+            EntryId(self.next_id);
+
         self.next_id += 1;
 
         self.entries.push(
@@ -92,21 +111,6 @@ impl Dictionary {
         id
     }
 
-    pub fn remove(
-        &mut self,
-        id: EntryId,
-    ) -> bool {
-        let original_len =
-            self.entries.len();
-
-        self.entries.retain(
-            |entry| entry.id != id,
-        );
-
-        self.entries.len()
-            != original_len
-    }
-
     pub fn edit(
         &mut self,
         id: EntryId,
@@ -116,15 +120,37 @@ impl Dictionary {
         if let Some(entry) =
             self.entries
                 .iter_mut()
-                .find(|entry| entry.id == id)
+                .find(|entry| {
+                    entry.id == id
+                })
         {
-            entry.wrong = wrong.to_string();
-            entry.correct = correct.to_string();
+            entry.wrong =
+                wrong.to_string();
+
+            entry.correct =
+                correct.to_string();
 
             true
         } else {
             false
         }
+    }
+
+    pub fn remove(
+        &mut self,
+        id: EntryId,
+    ) -> bool {
+        let original_len =
+            self.entries.len();
+
+        self.entries.retain(
+            |entry| {
+                entry.id != id
+            },
+        );
+
+        self.entries.len()
+            != original_len
     }
 
     pub fn entries(
@@ -146,11 +172,13 @@ fn replace_tokens(
     text.split_inclusive(
         |character: char| {
             character.is_whitespace()
-                || character.is_ascii_punctuation()
+                || character
+                    .is_ascii_punctuation()
         },
     )
     .map(|token| {
-        let mut boundary = token.len();
+        let mut boundary =
+            token.len();
 
         while boundary > 0 {
             let character =
@@ -165,17 +193,26 @@ fn replace_tokens(
                 })
             {
                 boundary -=
-                    character.unwrap().len_utf8();
+                    character
+                        .unwrap()
+                        .len_utf8();
             } else {
                 break;
             }
         }
 
-        let word = &token[..boundary];
-        let suffix = &token[boundary..];
+        let word =
+            &token[..boundary];
 
-        if word.eq_ignore_ascii_case(wrong) {
-            format!("{correct}{suffix}")
+        let suffix =
+            &token[boundary..];
+
+        if word.eq_ignore_ascii_case(
+            wrong,
+        ) {
+            format!(
+                "{correct}{suffix}"
+            )
         } else {
             token.to_string()
         }
@@ -206,6 +243,38 @@ mod tests {
         assert_eq!(
             dictionary.entries()[0].id,
             id
+        );
+    }
+
+    #[test]
+    fn shared_dictionary_can_be_updated() {
+        let dictionary =
+            shared();
+
+        {
+            let mut dictionary =
+                dictionary.write().unwrap();
+
+            dictionary.add(
+                "kubernets",
+                "Kubernetes",
+                EntrySource::Manual,
+            );
+        }
+
+        let mut dictionary =
+            dictionary.write().unwrap();
+
+        assert_eq!(
+            dictionary.entries().len(),
+            1
+        );
+
+        assert_eq!(
+            dictionary.apply(
+                "I use Kubernets."
+            ),
+            "I use Kubernetes."
         );
     }
 
@@ -326,7 +395,8 @@ mod tests {
         );
 
         assert_eq!(
-            dictionary.entries()[0].hit_count,
+            dictionary.entries()[0]
+                .hit_count,
             1
         );
 
@@ -335,7 +405,8 @@ mod tests {
         );
 
         assert_eq!(
-            dictionary.entries()[0].hit_count,
+            dictionary.entries()[0]
+                .hit_count,
             2
         );
     }
@@ -351,10 +422,13 @@ mod tests {
             EntrySource::Manual,
         );
 
-        assert!(dictionary.remove(id));
+        assert!(
+            dictionary.remove(id)
+        );
 
         assert!(
-            dictionary.entries().is_empty()
+            dictionary.entries()
+                .is_empty()
         );
     }
 

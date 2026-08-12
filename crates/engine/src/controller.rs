@@ -1,6 +1,13 @@
 use crate::{
-    dictionary::Dictionary,
+    dictionary::{
+        shared as shared_dictionary,
+        SharedDictionary,
+    },
     event::AppEvent,
+    last_dictation::{
+        shared,
+        SharedLastDictation,
+    },
     ports::{
         AudioRecorder,
         CleanedText,
@@ -10,7 +17,10 @@ use crate::{
         Transcript,
     },
     state::AppState,
-    stats::{DayKey, DictationStats},
+    stats::{
+        DayKey,
+        DictationStats,
+    },
 };
 
 #[derive(Debug)]
@@ -30,7 +40,14 @@ impl<
     SE: std::fmt::Display,
     CE: std::fmt::Display,
     IE: std::fmt::Display,
-> std::fmt::Display for ControllerError<RE, SE, CE, IE> {
+> std::fmt::Display
+    for ControllerError<
+        RE,
+        SE,
+        CE,
+        IE,
+    >
+{
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -77,17 +94,36 @@ impl<
     }
 }
 
-impl<RE, SE, CE, IE> std::error::Error
-    for ControllerError<RE, SE, CE, IE>
+impl<
+    RE,
+    SE,
+    CE,
+    IE,
+> std::error::Error
+    for ControllerError<
+        RE,
+        SE,
+        CE,
+        IE,
+    >
 where
-    RE: std::error::Error + 'static,
-    SE: std::error::Error + 'static,
-    CE: std::error::Error + 'static,
-    IE: std::error::Error + 'static,
+    RE: std::error::Error
+        + 'static,
+    SE: std::error::Error
+        + 'static,
+    CE: std::error::Error
+        + 'static,
+    IE: std::error::Error
+        + 'static,
 {
 }
 
-pub struct TinyVoxController<R, S, C, I>
+pub struct TinyVoxController<
+    R,
+    S,
+    C,
+    I,
+>
 where
     R: AudioRecorder,
     S: SpeechToText,
@@ -97,13 +133,24 @@ where
     state: AppState,
     recorder: R,
     speech_to_text: S,
-    dictionary: Dictionary,
+    dictionary: SharedDictionary,
     cleaner: C,
     injector: I,
     stats: DictationStats,
+    last_dictation: SharedLastDictation,
 }
 
-impl<R, S, C, I> TinyVoxController<R, S, C, I>
+impl<
+    R,
+    S,
+    C,
+    I,
+> TinyVoxController<
+    R,
+    S,
+    C,
+    I,
+>
 where
     R: AudioRecorder,
     S: SpeechToText,
@@ -113,7 +160,7 @@ where
     pub fn new(
         recorder: R,
         speech_to_text: S,
-        dictionary: Dictionary,
+        dictionary: SharedDictionary,
         cleaner: C,
         injector: I,
         stats: DictationStats,
@@ -126,6 +173,7 @@ where
             cleaner,
             injector,
             stats,
+            last_dictation: shared(),
         }
     }
 
@@ -133,12 +181,28 @@ where
         self.state
     }
 
-    pub fn stats(&self) -> &DictationStats {
+    pub fn stats(
+        &self,
+    ) -> &DictationStats {
         &self.stats
     }
 
-    pub fn stats_mut(&mut self) -> &mut DictationStats {
+    pub fn stats_mut(
+        &mut self,
+    ) -> &mut DictationStats {
         &mut self.stats
+    }
+
+    pub fn dictionary(
+        &self,
+    ) -> SharedDictionary {
+        self.dictionary.clone()
+    }
+
+    pub fn last_dictation(
+        &self,
+    ) -> SharedLastDictation {
+        self.last_dictation.clone()
     }
 
     pub fn start_recording(
@@ -167,11 +231,15 @@ where
 
         self.injector
             .prepare()
-            .map_err(ControllerError::Injector)?;
+            .map_err(
+                ControllerError::Injector,
+            )?;
 
         self.recorder
             .start()
-            .map_err(ControllerError::Recorder)?;
+            .map_err(
+                ControllerError::Recorder,
+            )?;
 
         self.state = next_state;
 
@@ -211,43 +279,53 @@ where
         let audio = self
             .recorder
             .stop()
-            .map_err(ControllerError::Recorder)?;
+            .map_err(
+                ControllerError::Recorder,
+            )?;
 
-        /*
-         * Recording duration is derived from the
-         * captured audio itself.
-         *
-         * This deliberately measures recording time,
-         * not transcription/cleanup latency.
-         */
         let recording_ms =
             if audio.sample_rate == 0 {
                 0
             } else {
                 (
-                    audio.samples.len() as u64
-                    * 1_000
-                ) / audio.sample_rate as u64
+                    audio.samples.len()
+                        as u64
+                        * 1_000
+                ) / audio.sample_rate
+                    as u64
             };
 
         self.state = next_state;
-        on_state_change(self.state);
+
+        on_state_change(
+            self.state,
+        );
 
         // Transcribing
         let transcript = self
             .speech_to_text
             .transcribe(&audio)
             .await
-            .map_err(ControllerError::SpeechToText)?;
+            .map_err(
+                ControllerError::SpeechToText,
+            )?;
 
         // Apply dictionary corrections
-        let corrected_text =
-            self.dictionary
-                .apply(&transcript.text);
+        let corrected_text = {
+            let mut dictionary =
+                self.dictionary
+                    .write()
+                    .unwrap();
 
-        let transcript = Transcript {
-            text: corrected_text,
+            dictionary.apply(
+                &transcript.text,
+            )
         };
+
+        let transcript =
+            Transcript {
+                text: corrected_text,
+            };
 
         // Transcribing → Cleaning
         let event =
@@ -264,14 +342,19 @@ where
             })?;
 
         self.state = next_state;
-        on_state_change(self.state);
+
+        on_state_change(
+            self.state,
+        );
 
         // Cleaning
         let cleaned_text = self
             .cleaner
             .clean(&transcript)
             .await
-            .map_err(ControllerError::Cleaner)?;
+            .map_err(
+                ControllerError::Cleaner,
+            )?;
 
         // Cleaning → Injecting
         let event =
@@ -288,25 +371,39 @@ where
             })?;
 
         self.state = next_state;
-        on_state_change(self.state);
+
+        on_state_change(
+            self.state,
+        );
 
         // Injecting
         self.injector
             .inject(&cleaned_text)
-            .map_err(ControllerError::Injector)?;
+            .map_err(
+                ControllerError::Injector,
+            )?;
 
-        /*
-         * Only record statistics after injection
-         * succeeds.
-         *
-         * Stats therefore cannot interfere with the
-         * actual dictation pipeline.
-         */
+        // Successful injection is now the
+        // authoritative last dictation.
+        {
+            let mut last_dictation =
+                self.last_dictation
+                    .write()
+                    .unwrap();
+
+            last_dictation.replace(
+                cleaned_text.text.clone(),
+            );
+        }
+
+        // Record stats only after
+        // successful injection.
         let word_count =
             cleaned_text
                 .text
                 .split_whitespace()
-                .count() as u32;
+                .count()
+                as u32;
 
         self.stats.record(
             day,
@@ -329,7 +426,10 @@ where
             })?;
 
         self.state = next_state;
-        on_state_change(self.state);
+
+        on_state_change(
+            self.state,
+        );
 
         Ok(())
     }
@@ -340,7 +440,10 @@ mod tests {
     use super::*;
 
     use crate::{
-        dictionary::EntrySource,
+        dictionary::{
+            shared as shared_dictionary,
+            EntrySource,
+        },
         ports::{
             AudioBuffer,
             CleanedText,
@@ -357,37 +460,52 @@ mod tests {
         recording: bool,
     }
 
-    impl AudioRecorder for FakeRecorder {
+    impl AudioRecorder
+        for FakeRecorder
+    {
         type Error = &'static str;
 
         fn start(
             &mut self,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<
+            (),
+            Self::Error,
+        > {
             self.recording = true;
             Ok(())
         }
 
         fn stop(
             &mut self,
-        ) -> Result<AudioBuffer, Self::Error> {
+        ) -> Result<
+            AudioBuffer,
+            Self::Error,
+        > {
             self.recording = false;
 
             Ok(AudioBuffer {
-                samples: vec![0.0; 16_000],
-                sample_rate: 16_000,
+                samples:
+                    vec![0.0; 16_000],
+                sample_rate:
+                    16_000,
             })
         }
     }
 
     struct FakeSpeechToText;
 
-    impl SpeechToText for FakeSpeechToText {
+    impl SpeechToText
+        for FakeSpeechToText
+    {
         type Error = &'static str;
 
         async fn transcribe(
             &self,
             audio: &AudioBuffer,
-        ) -> Result<Transcript, Self::Error> {
+        ) -> Result<
+            Transcript,
+            Self::Error,
+        > {
             assert_eq!(
                 audio.sample_rate,
                 16_000
@@ -411,7 +529,10 @@ mod tests {
         async fn transcribe(
             &self,
             _audio: &AudioBuffer,
-        ) -> Result<Transcript, Self::Error> {
+        ) -> Result<
+            Transcript,
+            Self::Error,
+        > {
             Ok(Transcript {
                 text:
                     "I use Kubernets every day."
@@ -425,7 +546,9 @@ mod tests {
             Arc<Mutex<Option<String>>>,
     }
 
-    impl TextCleaner for FakeCleaner {
+    impl TextCleaner
+        for FakeCleaner
+    {
         type Error = &'static str;
 
         fn clean(
@@ -461,19 +584,28 @@ mod tests {
 
     struct FakeInjector;
 
-    impl TextInjector for FakeInjector {
-        type Error = std::io::Error;
+    impl TextInjector
+        for FakeInjector
+    {
+        type Error =
+            std::io::Error;
 
         fn prepare(
             &mut self,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<
+            (),
+            Self::Error,
+        > {
             Ok(())
         }
 
         fn inject(
             &self,
             _text: &CleanedText,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<
+            (),
+            Self::Error,
+        > {
             Ok(())
         }
     }
@@ -497,11 +629,14 @@ mod tests {
             TinyVoxController::new(
                 recorder,
                 FakeSpeechToText,
-                Dictionary::new(),
+                shared_dictionary(),
                 FakeCleaner {
-                    received: Arc::new(
-                        Mutex::new(None),
-                    ),
+                    received:
+                        Arc::new(
+                            Mutex::new(
+                                None,
+                            ),
+                        ),
                 },
                 FakeInjector,
                 DictationStats::new(),
@@ -546,11 +681,14 @@ mod tests {
             TinyVoxController::new(
                 recorder,
                 FakeSpeechToText,
-                Dictionary::new(),
+                shared_dictionary(),
                 FakeCleaner {
-                    received: Arc::new(
-                        Mutex::new(None),
-                    ),
+                    received:
+                        Arc::new(
+                            Mutex::new(
+                                None,
+                            ),
+                        ),
                 },
                 FakeInjector,
                 DictationStats::new(),
@@ -561,16 +699,20 @@ mod tests {
             .unwrap();
 
         let result =
-            controller.start_recording();
+            controller
+                .start_recording();
 
         assert!(matches!(
             result,
             Err(
-                ControllerError::InvalidTransition {
-                    state: AppState::Recording,
-                    event:
-                        AppEvent::RecordingStarted,
-                }
+                ControllerError::
+                    InvalidTransition {
+                        state:
+                            AppState::Recording,
+                        event:
+                            AppEvent::
+                                RecordingStarted,
+                    }
             )
         ));
     }
@@ -583,7 +725,9 @@ mod tests {
             };
 
         let received =
-            Arc::new(Mutex::new(None));
+            Arc::new(
+                Mutex::new(None),
+            );
 
         let cleaner =
             FakeCleaner {
@@ -591,14 +735,21 @@ mod tests {
                     received.clone(),
             };
 
-        let mut dictionary =
-            Dictionary::new();
+        let dictionary =
+            shared_dictionary();
 
-        dictionary.add(
-            "kubernets",
-            "Kubernetes",
-            EntrySource::Manual,
-        );
+        {
+            let mut dictionary =
+                dictionary
+                    .write()
+                    .unwrap();
+
+            dictionary.add(
+                "kubernets",
+                "Kubernetes",
+                EntrySource::Manual,
+            );
+        }
 
         let mut controller =
             TinyVoxController::new(
@@ -644,11 +795,14 @@ mod tests {
             TinyVoxController::new(
                 recorder,
                 FakeSpeechToText,
-                Dictionary::new(),
+                shared_dictionary(),
                 FakeCleaner {
-                    received: Arc::new(
-                        Mutex::new(None),
-                    ),
+                    received:
+                        Arc::new(
+                            Mutex::new(
+                                None,
+                            ),
+                        ),
                 },
                 FakeInjector,
                 DictationStats::new(),
@@ -683,7 +837,9 @@ mod tests {
         assert_eq!(
             controller
                 .stats()
-                .today(test_day())
+                .today(
+                    test_day()
+                )
                 .dictations,
             1
         );
@@ -691,9 +847,120 @@ mod tests {
         assert_eq!(
             controller
                 .stats()
-                .today(test_day())
+                .today(
+                    test_day()
+                )
                 .words,
             3
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_injection_updates_last_dictation() {
+        let recorder =
+            FakeRecorder {
+                recording: false,
+            };
+
+        let mut controller =
+            TinyVoxController::new(
+                recorder,
+                FakeSpeechToText,
+                shared_dictionary(),
+                FakeCleaner {
+                    received:
+                        Arc::new(
+                            Mutex::new(
+                                None,
+                            ),
+                        ),
+                },
+                FakeInjector,
+                DictationStats::new(),
+            );
+
+        controller
+            .start_recording()
+            .unwrap();
+
+        controller
+            .stop_recording(
+                test_day(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        let last =
+            controller
+                .last_dictation();
+
+        let last =
+            last.read().unwrap();
+
+        assert_eq!(
+            last.text(),
+            "hello from TinyVox"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_dictionary_can_be_used_by_controller() {
+        let dictionary =
+            shared_dictionary();
+
+        {
+            let mut dictionary =
+                dictionary
+                    .write()
+                    .unwrap();
+
+            dictionary.add(
+                "kubernets",
+                "Kubernetes",
+                EntrySource::Manual,
+            );
+        }
+
+        let mut controller =
+            TinyVoxController::new(
+                FakeRecorder {
+                    recording: false,
+                },
+                DictionarySpeechToText,
+                dictionary.clone(),
+                FakeCleaner {
+                    received:
+                        Arc::new(
+                            Mutex::new(
+                                None,
+                            ),
+                        ),
+                },
+                FakeInjector,
+                DictationStats::new(),
+            );
+
+        controller
+            .start_recording()
+            .unwrap();
+
+        controller
+            .stop_recording(
+                test_day(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        let dictionary =
+            dictionary
+                .read()
+                .unwrap();
+
+        assert_eq!(
+            dictionary.entries().len(),
+            1
         );
     }
 }
