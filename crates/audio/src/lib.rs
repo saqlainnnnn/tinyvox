@@ -5,6 +5,13 @@ use cpal::{SampleFormat, Stream, StreamConfig};
 
 use tinyvox_engine::ports::{AudioBuffer, AudioRecorder};
 
+pub mod stream;
+
+pub use stream::{
+    AudioStreamError,
+    CpalAudioStreamer,
+};
+
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 pub struct CpalAudioRecorder {
