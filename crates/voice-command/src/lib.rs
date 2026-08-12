@@ -5,6 +5,8 @@ pub use gemini::{
     GeminiError,
     GeminiLiveProvider,
     GeminiLiveSession,
+    GeminiReceiveHandle,
+    GeminiSendHandle,
 };
 
 pub use ports::{

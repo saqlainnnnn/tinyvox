@@ -5,7 +5,10 @@ use futures_util::{
     StreamExt,
 };
 
-use serde_json::json;
+use serde_json::{
+    json,
+    Value,
+};
 
 use tokio::{
     net::TcpStream,
@@ -22,6 +25,7 @@ use tokio_tungstenite::{
 use crate::{
     ports::{
         AudioChunk,
+        ToolCall,
         VoiceEvent,
         VoiceProvider,
         VoiceSession,
@@ -244,11 +248,65 @@ impl VoiceProvider
                         "model": format!(
                             "models/{model}"
                         ),
+
                         "generationConfig": {
                             "responseModalities": [
                                 "AUDIO"
                             ]
-                        }
+                        },
+
+                        "tools": [
+                            {
+                                "functionDeclarations": [
+                                    {
+                                        "name":
+                                            "read_last_dictation",
+
+                                        "description":
+                                            "Returns the most recently injected dictation text.",
+
+                                        "parameters": {
+                                            "type":
+                                                "OBJECT"
+                                        }
+                                    },
+
+                                    {
+                                        "name":
+                                            "add_dictionary_entry",
+
+                                        "description":
+                                            "Adds a manual speech correction to the TinyVox dictionary.",
+
+                                        "parameters": {
+                                            "type":
+                                                "OBJECT",
+
+                                            "properties": {
+                                                "wrong": {
+                                                    "type":
+                                                        "STRING",
+                                                    "description":
+                                                        "The phrase TinyVox commonly mishears."
+                                                },
+
+                                                "correct": {
+                                                    "type":
+                                                        "STRING",
+                                                    "description":
+                                                        "The correct replacement text."
+                                                }
+                                            },
+
+                                            "required": [
+                                                "wrong",
+                                                "correct"
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 });
 
@@ -297,7 +355,7 @@ impl VoiceProvider
                 );
 
             // -------------------------------------------------
-            // WebSocket writer task
+            // WebSocket writer
             // -------------------------------------------------
 
             tokio::spawn(
@@ -322,7 +380,7 @@ impl VoiceProvider
             );
 
             // -------------------------------------------------
-            // WebSocket reader task
+            // WebSocket reader
             // -------------------------------------------------
 
             let pong_tx =
@@ -364,34 +422,11 @@ impl VoiceProvider
                             Message::Text(
                                 text,
                             ) => {
-                                match parse_server_message(
+                                handle_server_message(
                                     &text,
-                                ) {
-                                    Ok(Some(
-                                        event,
-                                    )) => {
-                                        if event_tx
-                                            .send(event)
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                    }
-
-                                    Ok(None) => {}
-
-                                    Err(error) => {
-                                        let _ =
-                                            event_tx
-                                                .send(
-                                                    VoiceEvent::Error(
-                                                        error.to_string(),
-                                                    ),
-                                                )
-                                                .await;
-                                    }
-                                }
+                                    &event_tx,
+                                )
+                                .await;
                             }
 
                             Message::Binary(
@@ -402,50 +437,24 @@ impl VoiceProvider
                                         &bytes,
                                     );
 
-                                match parse_server_message(
+                                handle_server_message(
                                     &text,
-                                ) {
-                                    Ok(Some(
-                                        event,
-                                    )) => {
-                                        if event_tx
-                                            .send(event)
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                    }
-
-                                    Ok(None) => {}
-
-                                    Err(error) => {
-                                        let _ =
-                                            event_tx
-                                                .send(
-                                                    VoiceEvent::Error(
-                                                        error.to_string(),
-                                                    ),
-                                                )
-                                                .await;
-                                    }
-                                }
+                                    &event_tx,
+                                )
+                                .await;
                             }
 
                             Message::Ping(
                                 payload,
                             ) => {
-                                if pong_tx
-                                    .send(
-                                        Message::Pong(
-                                            payload,
-                                        ),
-                                    )
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
+                                let _ =
+                                    pong_tx
+                                        .send(
+                                            Message::Pong(
+                                                payload,
+                                            ),
+                                        )
+                                        .await;
                             }
 
                             Message::Close(
@@ -514,7 +523,7 @@ impl VoiceProvider
 }
 
 // =============================================================
-// Full session
+// Session
 // =============================================================
 
 pub struct GeminiLiveSession {
@@ -596,37 +605,92 @@ impl GeminiSendHandle {
                 ),
             )
             .await
-            .map_err(
-                |_| {
-                    GeminiError::
-                        ChannelClosed
-                },
-            )?;
-
-        Ok(())
+            .map_err(|_| {
+                GeminiError::ChannelClosed
+            })
     }
-    pub async fn end_audio(
+
+    pub async fn send_text(
         &self,
+        text: &str,
     ) -> Result<(), GeminiError> {
-        let message = json!({
-            "realtimeInput": {
-                "audioStreamEnd": true
-            }
-        });
+        let message =
+            json!({
+                "realtimeInput": {
+                    "text": text
+                }
+            });
 
         self.send_tx
-            .send(Message::Text(
-                message.to_string().into(),
-            ))
+            .send(
+                Message::Text(
+                    message
+                        .to_string()
+                        .into(),
+                ),
+            )
             .await
             .map_err(|_| {
                 GeminiError::ChannelClosed
-            })?;
-
-        Ok(())
+            })
     }
 
+    pub async fn end_audio(
+        &self,
+    ) -> Result<(), GeminiError> {
+        let message =
+            json!({
+                "realtimeInput": {
+                    "audioStreamEnd": true
+                }
+            });
 
+        self.send_tx
+            .send(
+                Message::Text(
+                    message
+                        .to_string()
+                        .into(),
+                ),
+            )
+            .await
+            .map_err(|_| {
+                GeminiError::ChannelClosed
+            })
+    }
+
+    pub async fn send_tool_response(
+        &self,
+        id: &str,
+        name: &str,
+        response: Value,
+    ) -> Result<(), GeminiError> {
+        let message =
+            json!({
+                "toolResponse": {
+                    "functionResponses": [
+                        {
+                            "id": id,
+                            "name": name,
+                            "response": response
+                        }
+                    ]
+                }
+            });
+
+        self.send_tx
+            .send(
+                Message::Text(
+                    message
+                        .to_string()
+                        .into(),
+                ),
+            )
+            .await
+            .map_err(|_| {
+                GeminiError::ChannelClosed
+            })
+    }
 }
 
 // =============================================================
@@ -649,20 +713,20 @@ impl GeminiReceiveHandle {
             .recv()
             .await
             .ok_or(
-                GeminiError::
-                    ConnectionClosed,
+                GeminiError::ConnectionClosed,
             )
     }
 }
 
 // =============================================================
-// Existing VoiceSession implementation
+// VoiceSession compatibility
 // =============================================================
 
 impl VoiceSession
     for GeminiLiveSession
 {
-    type Error = GeminiError;
+    type Error =
+        GeminiError;
 
     fn send_audio(
         &mut self,
@@ -704,12 +768,10 @@ impl VoiceSession
                     ),
                 )
                 .await
-                .map_err(
-                    |_| {
-                        GeminiError::
-                            ChannelClosed
-                    },
-                )
+                .map_err(|_| {
+                    GeminiError::
+                        ChannelClosed
+                })
         }
     }
 
@@ -739,15 +801,45 @@ impl VoiceSession
         Output =
             Result<(), Self::Error>,
     > + Send {
-        async move {
+        async {
             Ok(())
         }
     }
 }
 
 // =============================================================
-// Setup
+// Server messages
 // =============================================================
+
+async fn handle_server_message(
+    text: &str,
+    event_tx: &mpsc::Sender<VoiceEvent>,
+) {
+    match parse_server_message(text) {
+        Ok(events) => {
+            for event in events {
+                if event_tx
+                    .send(event)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+
+        Err(error) => {
+            let _ =
+                event_tx
+                    .send(
+                        VoiceEvent::Error(
+                            error.to_string(),
+                        ),
+                    )
+                    .await;
+        }
+    }
+}
 
 async fn wait_for_setup_complete(
     websocket: &mut GeminiWebSocket,
@@ -765,7 +857,7 @@ async fn wait_for_setup_complete(
         match message {
             Message::Text(text) => {
                 let value:
-                    serde_json::Value =
+                    Value =
                     serde_json::from_str(
                         &text,
                     )?;
@@ -783,7 +875,8 @@ async fn wait_for_setup_complete(
                     return Err(
                         GeminiError::
                             UnexpectedResponse(
-                                error.to_string(),
+                                error
+                                    .to_string(),
                             ),
                     );
                 }
@@ -791,7 +884,7 @@ async fn wait_for_setup_complete(
 
             Message::Binary(bytes) => {
                 let value:
-                    serde_json::Value =
+                    Value =
                     serde_json::from_slice(
                         &bytes,
                     )?;
@@ -809,7 +902,8 @@ async fn wait_for_setup_complete(
                     return Err(
                         GeminiError::
                             UnexpectedResponse(
-                                error.to_string(),
+                                error
+                                    .to_string(),
                             ),
                     );
                 }
@@ -847,9 +941,7 @@ async fn wait_for_setup_complete(
                 return Err(
                     GeminiError::
                         UnexpectedResponse(
-                            format!(
-                                "Gemini closed WebSocket during setup: {reason}"
-                            ),
+                            reason,
                         ),
                 );
             }
@@ -861,43 +953,46 @@ async fn wait_for_setup_complete(
     }
 }
 
-// =============================================================
-// Server event parser
-// =============================================================
-
 fn parse_server_message(
     text: &str,
 ) -> Result<
-    Option<VoiceEvent>,
+    Vec<VoiceEvent>,
     GeminiError,
 > {
     let value:
-        serde_json::Value =
+        Value =
         serde_json::from_str(text)?;
+
+    let mut events =
+        Vec::new();
 
     if let Some(error) =
         value.get("error")
     {
-        return Ok(Some(
+        events.push(
             VoiceEvent::Error(
                 error.to_string(),
             ),
-        ));
+        );
+
+        return Ok(events);
     }
 
-    if let Some(server_content) =
+    if let Some(
+        server_content
+    ) =
         value.get("serverContent")
     {
         if server_content
             .get("turnComplete")
             .and_then(
-                serde_json::Value::as_bool,
+                Value::as_bool,
             )
             == Some(true)
         {
-            return Ok(Some(
+            events.push(
                 VoiceEvent::TurnComplete,
-            ));
+            );
         }
 
         if let Some(model_turn) =
@@ -908,59 +1003,122 @@ fn parse_server_message(
                 model_turn
                     .get("parts")
                     .and_then(
-                        serde_json::Value::as_array,
+                        Value::as_array,
                     )
             {
                 for part in parts {
-                    if let Some(
+                    let Some(
                         inline_data,
                     ) =
                         part.get(
                             "inlineData",
                         )
-                    {
-                        if let Some(data) =
-                            inline_data
-                                .get("data")
-                                .and_then(
-                                    serde_json::Value::as_str,
-                                )
-                        {
-                            let bytes =
-                                base64::Engine::decode(
-                                    &base64
-                                        ::engine
-                                        ::general_purpose
-                                        ::STANDARD,
-                                    data,
-                                )
-                                .map_err(
-                                    |error| {
-                                        GeminiError::
-                                            UnexpectedResponse(
-                                                format!(
-                                                    "invalid audio base64: {error}"
-                                                ),
-                                            )
-                                    },
-                                )?;
+                    else {
+                        continue;
+                    };
 
-                            return Ok(Some(
-                                VoiceEvent::AudioOut(
-                                    AudioChunk {
-                                        samples:
-                                            bytes,
-                                    },
-                                ),
-                            ));
-                        }
-                    }
+                    let Some(data) =
+                        inline_data
+                            .get("data")
+                            .and_then(
+                                Value::as_str,
+                            )
+                    else {
+                        continue;
+                    };
+
+                    let bytes =
+                        base64::Engine::decode(
+                            &base64
+                                ::engine
+                                ::general_purpose
+                                ::STANDARD,
+                            data,
+                        )
+                        .map_err(
+                            |error| {
+                                GeminiError::
+                                    UnexpectedResponse(
+                                        format!(
+                                            "invalid audio base64: {error}"
+                                        ),
+                                    )
+                            },
+                        )?;
+
+                    events.push(
+                        VoiceEvent::AudioOut(
+                            AudioChunk {
+                                samples:
+                                    bytes,
+                            },
+                        ),
+                    );
                 }
             }
         }
     }
 
-    Ok(None)
+    if let Some(
+        tool_call
+    ) =
+        value.get("toolCall")
+    {
+        if let Some(
+            function_calls
+        ) =
+            tool_call
+                .get("functionCalls")
+                .and_then(
+                    Value::as_array,
+                )
+        {
+            for function_call
+                in function_calls
+            {
+                let id =
+                    function_call
+                        .get("id")
+                        .and_then(
+                            Value::as_str,
+                        )
+                        .unwrap_or_default()
+                        .to_string();
+
+                let name =
+                    function_call
+                        .get("name")
+                        .and_then(
+                            Value::as_str,
+                        )
+                        .unwrap_or_default()
+                        .to_string();
+
+                let arguments =
+                    function_call
+                        .get("args")
+                        .cloned()
+                        .unwrap_or_else(
+                            || {
+                                json!({})
+                            },
+                        )
+                        .to_string();
+
+                events.push(
+                    VoiceEvent::ToolCall(
+                        ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        },
+                    ),
+                );
+            }
+        }
+    }
+
+    Ok(events)
 }
 
 #[cfg(test)]
@@ -969,7 +1127,7 @@ mod tests {
 
     #[test]
     fn parses_turn_complete() {
-        let event =
+        let events =
             parse_server_message(
                 r#"{
                     "serverContent": {
@@ -980,10 +1138,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            event,
-            Some(
+            events,
+            vec![
                 VoiceEvent::TurnComplete
-            )
+            ]
         );
     }
 
@@ -1013,22 +1171,63 @@ mod tests {
                 }}"#
             );
 
-        let event =
+        let events =
             parse_server_message(
                 &message,
             )
             .unwrap();
 
         assert_eq!(
-            event,
-            Some(
-                VoiceEvent::AudioOut(
-                    AudioChunk {
-                        samples:
-                            vec![1, 2, 3],
-                    },
-                ),
+            events.len(),
+            1
+        );
+
+        assert_eq!(
+            events[0],
+            VoiceEvent::AudioOut(
+                AudioChunk {
+                    samples:
+                        vec![1, 2, 3],
+                }
             )
+        );
+    }
+
+    #[test]
+    fn parses_tool_call() {
+        let events =
+            parse_server_message(
+                r#"{
+                    "toolCall": {
+                        "functionCalls": [
+                            {
+                                "id": "call-123",
+                                "name": "read_last_dictation",
+                                "args": {}
+                            }
+                        ]
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                VoiceEvent::ToolCall(
+                    ToolCall {
+                        id:
+                            "call-123"
+                                .to_string(),
+                        name:
+                            "read_last_dictation"
+                                .to_string(),
+                        arguments:
+                            "{}"
+                                .to_string(),
+                    }
+                )
+            ]
         );
     }
 }

@@ -2140,6 +2140,7 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "tinyvox-engine",
  "tokio",
  "tokio-tungstenite",
  "url",

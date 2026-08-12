@@ -8,7 +8,7 @@ pub enum ToolRequest {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum ToolResult {
     LastDictation {
         text: Option<String>,

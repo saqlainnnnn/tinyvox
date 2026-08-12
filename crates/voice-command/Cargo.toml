@@ -19,3 +19,4 @@ symphonia = { version = "0.5", features = [
     "pcm",
 ] }
 audio = { version = "0.1.0", path = "../audio" }
+tinyvox-engine = {version = "0.1.0", path = "../engine"}

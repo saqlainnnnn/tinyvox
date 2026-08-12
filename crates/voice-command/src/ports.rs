@@ -7,6 +7,7 @@ pub struct AudioChunk {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
+    pub id: String,
     pub name: String,
     pub arguments: String,
 }
