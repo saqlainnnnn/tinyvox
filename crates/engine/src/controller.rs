@@ -10,6 +10,7 @@ use crate::{
         Transcript,
     },
     state::AppState,
+    stats::{DayKey, DictationStats},
 };
 
 #[derive(Debug)]
@@ -29,14 +30,16 @@ impl<
     SE: std::fmt::Display,
     CE: std::fmt::Display,
     IE: std::fmt::Display,
-> std::fmt::Display for ControllerError<RE, SE, CE, IE>
-{
+> std::fmt::Display for ControllerError<RE, SE, CE, IE> {
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match self {
-            Self::InvalidTransition { state, event } => {
+            Self::InvalidTransition {
+                state,
+                event,
+            } => {
                 write!(
                     f,
                     "invalid transition from {state:?} using {event:?}"
@@ -44,19 +47,31 @@ impl<
             }
 
             Self::Recorder(error) => {
-                write!(f, "audio recorder error: {error}")
+                write!(
+                    f,
+                    "audio recorder error: {error}"
+                )
             }
 
             Self::SpeechToText(error) => {
-                write!(f, "speech-to-text error: {error}")
+                write!(
+                    f,
+                    "speech-to-text error: {error}"
+                )
             }
 
             Self::Cleaner(error) => {
-                write!(f, "text cleanup error: {error}")
+                write!(
+                    f,
+                    "text cleanup error: {error}"
+                )
             }
 
             Self::Injector(error) => {
-                write!(f, "text injection error: {error}")
+                write!(
+                    f,
+                    "text injection error: {error}"
+                )
             }
         }
     }
@@ -85,6 +100,7 @@ where
     dictionary: Dictionary,
     cleaner: C,
     injector: I,
+    stats: DictationStats,
 }
 
 impl<R, S, C, I> TinyVoxController<R, S, C, I>
@@ -100,6 +116,7 @@ where
         dictionary: Dictionary,
         cleaner: C,
         injector: I,
+        stats: DictationStats,
     ) -> Self {
         Self {
             state: AppState::Idle,
@@ -108,11 +125,20 @@ where
             dictionary,
             cleaner,
             injector,
+            stats,
         }
     }
 
     pub fn state(&self) -> AppState {
         self.state
+    }
+
+    pub fn stats(&self) -> &DictationStats {
+        &self.stats
+    }
+
+    pub fn stats_mut(&mut self) -> &mut DictationStats {
+        &mut self.stats
     }
 
     pub fn start_recording(
@@ -126,7 +152,8 @@ where
             I::Error,
         >,
     > {
-        let event = AppEvent::RecordingStarted;
+        let event =
+            AppEvent::RecordingStarted;
 
         let next_state = self
             .state
@@ -153,6 +180,7 @@ where
 
     pub async fn stop_recording<F>(
         &mut self,
+        day: DayKey,
         on_state_change: F,
     ) -> Result<
         (),
@@ -167,7 +195,8 @@ where
         F: Fn(AppState),
     {
         // Recording → Transcribing
-        let event = AppEvent::RecordingStopped;
+        let event =
+            AppEvent::RecordingStopped;
 
         let next_state = self
             .state
@@ -184,6 +213,23 @@ where
             .stop()
             .map_err(ControllerError::Recorder)?;
 
+        /*
+         * Recording duration is derived from the
+         * captured audio itself.
+         *
+         * This deliberately measures recording time,
+         * not transcription/cleanup latency.
+         */
+        let recording_ms =
+            if audio.sample_rate == 0 {
+                0
+            } else {
+                (
+                    audio.samples.len() as u64
+                    * 1_000
+                ) / audio.sample_rate as u64
+            };
+
         self.state = next_state;
         on_state_change(self.state);
 
@@ -196,14 +242,16 @@ where
 
         // Apply dictionary corrections
         let corrected_text =
-            self.dictionary.apply(&transcript.text);
+            self.dictionary
+                .apply(&transcript.text);
 
         let transcript = Transcript {
             text: corrected_text,
         };
 
         // Transcribing → Cleaning
-        let event = AppEvent::TranscriptionCompleted;
+        let event =
+            AppEvent::TranscriptionCompleted;
 
         let next_state = self
             .state
@@ -226,7 +274,8 @@ where
             .map_err(ControllerError::Cleaner)?;
 
         // Cleaning → Injecting
-        let event = AppEvent::CleanupCompleted;
+        let event =
+            AppEvent::CleanupCompleted;
 
         let next_state = self
             .state
@@ -246,8 +295,28 @@ where
             .inject(&cleaned_text)
             .map_err(ControllerError::Injector)?;
 
+        /*
+         * Only record statistics after injection
+         * succeeds.
+         *
+         * Stats therefore cannot interfere with the
+         * actual dictation pipeline.
+         */
+        let word_count =
+            cleaned_text
+                .text
+                .split_whitespace()
+                .count() as u32;
+
+        self.stats.record(
+            day,
+            word_count,
+            recording_ms,
+        );
+
         // Injecting → Idle
-        let event = AppEvent::InjectionCompleted;
+        let event =
+            AppEvent::InjectionCompleted;
 
         let next_state = self
             .state
@@ -269,6 +338,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::{
         dictionary::EntrySource,
         ports::{
@@ -277,6 +347,7 @@ mod tests {
             Transcript,
         },
     };
+
     use std::sync::{
         Arc,
         Mutex,
@@ -323,15 +394,18 @@ mod tests {
             );
 
             Ok(Transcript {
-                text: "  hello from TinyVox  "
-                    .to_string(),
+                text:
+                    "  hello from TinyVox  "
+                        .to_string(),
             })
         }
     }
 
     struct DictionarySpeechToText;
 
-    impl SpeechToText for DictionarySpeechToText {
+    impl SpeechToText
+        for DictionarySpeechToText
+    {
         type Error = &'static str;
 
         async fn transcribe(
@@ -339,14 +413,16 @@ mod tests {
             _audio: &AudioBuffer,
         ) -> Result<Transcript, Self::Error> {
             Ok(Transcript {
-                text: "I use Kubernets every day."
-                    .to_string(),
+                text:
+                    "I use Kubernets every day."
+                        .to_string(),
             })
         }
     }
 
     struct FakeCleaner {
-        received: Arc<Mutex<Option<String>>>,
+        received:
+            Arc<Mutex<Option<String>>>,
     }
 
     impl TextCleaner for FakeCleaner {
@@ -356,10 +432,11 @@ mod tests {
             &self,
             transcript: &Transcript,
         ) -> impl std::future::Future<
-            Output = Result<
-                CleanedText,
-                Self::Error,
-            >,
+            Output =
+                Result<
+                    CleanedText,
+                    Self::Error,
+                >,
         > + Send {
             let received =
                 self.received.clone();
@@ -368,11 +445,15 @@ mod tests {
                 transcript.text.clone();
 
             async move {
-                *received.lock().unwrap() =
+                *received
+                    .lock()
+                    .unwrap() =
                     Some(text.clone());
 
                 Ok(CleanedText {
-                    text: text.trim().to_string(),
+                    text: text
+                        .trim()
+                        .to_string(),
                 })
             }
         }
@@ -397,11 +478,20 @@ mod tests {
         }
     }
 
+    fn test_day() -> DayKey {
+        DayKey::new(
+            2026,
+            8,
+            12,
+        )
+    }
+
     #[tokio::test]
     async fn recording_lifecycle_is_managed_by_controller() {
-        let recorder = FakeRecorder {
-            recording: false,
-        };
+        let recorder =
+            FakeRecorder {
+                recording: false,
+            };
 
         let mut controller =
             TinyVoxController::new(
@@ -414,6 +504,7 @@ mod tests {
                     ),
                 },
                 FakeInjector,
+                DictationStats::new(),
             );
 
         assert_eq!(
@@ -431,7 +522,10 @@ mod tests {
         );
 
         controller
-            .stop_recording(|_| {})
+            .stop_recording(
+                test_day(),
+                |_| {},
+            )
             .await
             .unwrap();
 
@@ -443,9 +537,10 @@ mod tests {
 
     #[tokio::test]
     async fn cannot_start_twice() {
-        let recorder = FakeRecorder {
-            recording: false,
-        };
+        let recorder =
+            FakeRecorder {
+                recording: false,
+            };
 
         let mut controller =
             TinyVoxController::new(
@@ -458,6 +553,7 @@ mod tests {
                     ),
                 },
                 FakeInjector,
+                DictationStats::new(),
             );
 
         controller
@@ -472,7 +568,8 @@ mod tests {
             Err(
                 ControllerError::InvalidTransition {
                     state: AppState::Recording,
-                    event: AppEvent::RecordingStarted,
+                    event:
+                        AppEvent::RecordingStarted,
                 }
             )
         ));
@@ -480,18 +577,19 @@ mod tests {
 
     #[tokio::test]
     async fn dictionary_correction_reaches_cleaner() {
-        let recorder = FakeRecorder {
-            recording: false,
-        };
+        let recorder =
+            FakeRecorder {
+                recording: false,
+            };
 
         let received =
-            Arc::new(
-                Mutex::new(None),
-            );
+            Arc::new(Mutex::new(None));
 
-        let cleaner = FakeCleaner {
-            received: received.clone(),
-        };
+        let cleaner =
+            FakeCleaner {
+                received:
+                    received.clone(),
+            };
 
         let mut dictionary =
             Dictionary::new();
@@ -509,6 +607,7 @@ mod tests {
                 dictionary,
                 cleaner,
                 FakeInjector,
+                DictationStats::new(),
             );
 
         controller
@@ -516,13 +615,85 @@ mod tests {
             .unwrap();
 
         controller
-            .stop_recording(|_| {})
+            .stop_recording(
+                test_day(),
+                |_| {},
+            )
             .await
             .unwrap();
 
         assert_eq!(
-            received.lock().unwrap().as_deref(),
-            Some("I use Kubernetes every day.")
+            received
+                .lock()
+                .unwrap()
+                .as_deref(),
+            Some(
+                "I use Kubernetes every day."
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_injection_records_stats() {
+        let recorder =
+            FakeRecorder {
+                recording: false,
+            };
+
+        let mut controller =
+            TinyVoxController::new(
+                recorder,
+                FakeSpeechToText,
+                Dictionary::new(),
+                FakeCleaner {
+                    received: Arc::new(
+                        Mutex::new(None),
+                    ),
+                },
+                FakeInjector,
+                DictationStats::new(),
+            );
+
+        controller
+            .start_recording()
+            .unwrap();
+
+        controller
+            .stop_recording(
+                test_day(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            controller
+                .stats()
+                .total_dictations(),
+            1
+        );
+
+        assert_eq!(
+            controller
+                .stats()
+                .total_words(),
+            3
+        );
+
+        assert_eq!(
+            controller
+                .stats()
+                .today(test_day())
+                .dictations,
+            1
+        );
+
+        assert_eq!(
+            controller
+                .stats()
+                .today(test_day())
+                .words,
+            3
         );
     }
 }

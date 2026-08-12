@@ -4,3 +4,5 @@ pub mod dictionary_store;
 pub mod event;
 pub mod ports;
 pub mod state;
+pub mod stats;
+pub mod stats_store;
