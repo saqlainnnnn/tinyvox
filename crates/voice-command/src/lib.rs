@@ -1,11 +1,19 @@
+pub mod gemini;
+pub mod ports;
+
+pub use gemini::{
+    GeminiError,
+    GeminiLiveProvider,
+    GeminiLiveSession,
+};
+
 pub use ports::{
     AudioChunk,
     ToolCall,
+    VoiceEvent,
     VoiceProvider,
     VoiceSession,
 };
-
-pub mod ports;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceState {
@@ -19,7 +27,7 @@ pub enum VoiceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoiceEvent {
+pub enum VoiceStateEvent {
     ConnectRequested,
     Connected,
     ConnectionFailed,
@@ -58,66 +66,66 @@ impl VoiceState {
 
     pub fn transition(
         self,
-        event: VoiceEvent,
+        event: VoiceStateEvent,
     ) -> Option<Self> {
         match (self, event) {
             (
                 Self::Disconnected,
-                VoiceEvent::ConnectRequested,
+                VoiceStateEvent::ConnectRequested,
             ) => Some(Self::Connecting),
 
             (
                 Self::Connecting,
-                VoiceEvent::Connected,
+                VoiceStateEvent::Connected,
             ) => Some(Self::Listening),
 
             (
                 Self::Connecting,
-                VoiceEvent::ConnectionFailed,
+                VoiceStateEvent::ConnectionFailed,
             ) => Some(Self::Disconnected),
 
-            (_, VoiceEvent::Disconnected) => {
+            (_, VoiceStateEvent::Disconnected) => {
                 Some(Self::Disconnected)
             }
 
             (
                 Self::Listening,
-                VoiceEvent::UserStartedTalking,
+                VoiceStateEvent::UserStartedTalking,
             ) => Some(Self::UserTalking),
 
             (
                 Self::UserTalking,
-                VoiceEvent::UserStoppedTalking,
+                VoiceStateEvent::UserStoppedTalking,
             ) => Some(Self::Thinking),
 
             (
                 Self::Thinking,
-                VoiceEvent::ResponseStarted,
+                VoiceStateEvent::ResponseStarted,
             ) => Some(Self::Speaking),
 
             (
                 Self::Speaking,
-                VoiceEvent::ResponseCompleted,
+                VoiceStateEvent::ResponseCompleted,
             ) => Some(Self::Listening),
 
             (
                 Self::Thinking,
-                VoiceEvent::ToolCallReceived,
+                VoiceStateEvent::ToolCallReceived,
             ) => Some(Self::Thinking),
 
             (
                 Self::Thinking,
-                VoiceEvent::ToolCallCompleted,
+                VoiceStateEvent::ToolCallCompleted,
             ) => Some(Self::Thinking),
 
             (
                 Self::Speaking,
-                VoiceEvent::BargeInDetected,
+                VoiceStateEvent::BargeInDetected,
             ) => Some(Self::BargeIn),
 
             (
                 Self::BargeIn,
-                VoiceEvent::UserStartedTalking,
+                VoiceStateEvent::UserStartedTalking,
             ) => Some(Self::UserTalking),
 
             _ => None,
@@ -136,7 +144,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ConnectRequested,
+                VoiceStateEvent::ConnectRequested,
             )
             .unwrap();
 
@@ -147,7 +155,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::Connected,
+                VoiceStateEvent::Connected,
             )
             .unwrap();
 
@@ -168,7 +176,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ConnectionFailed,
+                VoiceStateEvent::ConnectionFailed,
             )
             .unwrap();
 
@@ -185,7 +193,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::UserStartedTalking,
+                VoiceStateEvent::UserStartedTalking,
             )
             .unwrap();
 
@@ -196,7 +204,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::UserStoppedTalking,
+                VoiceStateEvent::UserStoppedTalking,
             )
             .unwrap();
 
@@ -207,7 +215,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ResponseStarted,
+                VoiceStateEvent::ResponseStarted,
             )
             .unwrap();
 
@@ -218,7 +226,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ResponseCompleted,
+                VoiceStateEvent::ResponseCompleted,
             )
             .unwrap();
 
@@ -235,7 +243,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ToolCallReceived,
+                VoiceStateEvent::ToolCallReceived,
             )
             .unwrap();
 
@@ -246,7 +254,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::ToolCallCompleted,
+                VoiceStateEvent::ToolCallCompleted,
             )
             .unwrap();
 
@@ -263,7 +271,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::BargeInDetected,
+                VoiceStateEvent::BargeInDetected,
             )
             .unwrap();
 
@@ -274,7 +282,7 @@ mod tests {
 
         let state = state
             .transition(
-                VoiceEvent::UserStartedTalking,
+                VoiceStateEvent::UserStartedTalking,
             )
             .unwrap();
 
@@ -298,7 +306,7 @@ mod tests {
         for state in states {
             assert_eq!(
                 state.transition(
-                    VoiceEvent::Disconnected,
+                    VoiceStateEvent::Disconnected,
                 ),
                 Some(
                     VoiceState::Disconnected
@@ -312,7 +320,7 @@ mod tests {
         assert_eq!(
             VoiceState::Listening
                 .transition(
-                    VoiceEvent::ResponseCompleted,
+                    VoiceStateEvent::ResponseCompleted,
                 ),
             None
         );
@@ -320,7 +328,7 @@ mod tests {
         assert_eq!(
             VoiceState::Speaking
                 .transition(
-                    VoiceEvent::UserStoppedTalking,
+                    VoiceStateEvent::UserStoppedTalking,
                 ),
             None
         );
@@ -328,7 +336,7 @@ mod tests {
         assert_eq!(
             VoiceState::Disconnected
                 .transition(
-                    VoiceEvent::ResponseStarted,
+                    VoiceStateEvent::ResponseStarted,
                 ),
             None
         );

@@ -9,6 +9,10 @@ use cleanup::{
 use stt_pulse::PulseClient;
 use tinyvox_engine::{
     controller::TinyVoxController,
+    dictionary::{
+        shared as shared_dictionary,
+        Dictionary,
+    },
     dictionary_store::DictionaryStore,
     state::AppState,
     stats::DayKey,
@@ -178,6 +182,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dictionary =
         dictionary_store.load()?;
 
+    let shared_dictionary =
+        shared_dictionary();
+
+    *shared_dictionary
+        .write()
+        .unwrap() = dictionary;
+
     // ---------------------------------------------------------
     // Stats
     // ---------------------------------------------------------
@@ -205,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TinyVoxController::new(
             recorder,
             speech_to_text,
-            dictionary,
+            shared_dictionary,
             cleaner,
             injector,
             stats,
