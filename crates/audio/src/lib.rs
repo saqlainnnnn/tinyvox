@@ -12,6 +12,13 @@ pub use stream::{
     CpalAudioStreamer,
 };
 
+pub mod playback;
+
+pub use playback::{
+    AudioPlaybackError,
+    CpalAudioPlayback,
+};
+
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 pub struct CpalAudioRecorder {

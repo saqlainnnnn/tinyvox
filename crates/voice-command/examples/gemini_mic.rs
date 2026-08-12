@@ -1,13 +1,14 @@
 use std::time::Duration;
 
-use audio::CpalAudioStreamer;
-use dotenvy::dotenv;
-use tokio::{
-    time::{
-        sleep,
-        timeout,
-    },
+use audio::{
+    CpalAudioPlayback,
+    CpalAudioStreamer,
 };
+
+use dotenvy::dotenv;
+
+use tokio::time::sleep;
+
 use voice_command::{
     AudioChunk,
     GeminiLiveProvider,
@@ -40,6 +41,10 @@ async fn main()
             )?;
     }
 
+    println!(
+        "🔌 Connecting to Gemini Live..."
+    );
+
     let provider =
         GeminiLiveProvider::from_env()?;
 
@@ -64,7 +69,7 @@ async fn main()
 
     let receiver =
         tokio::spawn(
-            receiver_task(
+            speaker_task(
                 receive_handle,
             ),
         );
@@ -145,13 +150,13 @@ async fn microphone_task(
 
     microphone.stop();
 
-    println!(
-        "✓ Microphone stream stopped."
-    );
-
     send_handle
         .end_audio()
         .await?;
+
+    println!(
+        "✓ Microphone stream stopped."
+    );
 
     println!(
         "→ Sent audioStreamEnd to Gemini."
@@ -163,29 +168,43 @@ async fn microphone_task(
     ))
 }
 
-async fn receiver_task(
-    mut receive_handle: GeminiReceiveHandle,
+async fn speaker_task(
+    mut receive_handle:
+        GeminiReceiveHandle,
 ) -> Result<
     (usize, usize),
     Box<dyn std::error::Error + Send + Sync>,
 > {
+    let mut playback =
+        CpalAudioPlayback::new()?;
+
+    playback.start()?;
+
+    println!(
+        "🔊 Speaker playback ready."
+    );
+
     let mut audio_bytes = 0usize;
     let mut turns = 0usize;
 
     loop {
-        let event = timeout(
-            Duration::from_secs(20),
-            receive_handle.poll_event(),
-        )
-        .await
-        .map_err(
-            |_| {
-                "timed out waiting for Gemini response"
-            },
-        )??;
+        let event =
+            tokio::time::timeout(
+                Duration::from_secs(20),
+                receive_handle
+                    .poll_event(),
+            )
+            .await
+            .map_err(
+                |_| {
+                    "timed out waiting for Gemini response"
+                },
+            )??;
 
         match event {
-            VoiceEvent::AudioOut(chunk) => {
+            VoiceEvent::AudioOut(
+                chunk,
+            ) => {
                 audio_bytes +=
                     chunk.samples.len();
 
@@ -193,6 +212,11 @@ async fn receiver_task(
                     "← Gemini audio: {} bytes",
                     chunk.samples.len()
                 );
+
+                playback
+                    .push_pcm16(
+                        &chunk.samples,
+                    )?;
             }
 
             VoiceEvent::TurnComplete => {
@@ -206,6 +230,8 @@ async fn receiver_task(
             }
 
             VoiceEvent::Error(error) => {
+                playback.stop();
+
                 return Err(
                     format!(
                         "Gemini error: {error}"
@@ -217,6 +243,21 @@ async fn receiver_task(
             _ => {}
         }
     }
+
+    /*
+     * Give CPAL time to drain queued audio
+     * before destroying the stream.
+     */
+    sleep(
+        Duration::from_secs(2),
+    )
+    .await;
+
+    playback.stop();
+
+    println!(
+        "✓ Speaker playback finished."
+    );
 
     Ok((
         audio_bytes,
