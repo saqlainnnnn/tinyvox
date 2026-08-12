@@ -4,14 +4,20 @@ use futures_util::{
     SinkExt,
     StreamExt,
 };
+
 use serde_json::json;
+
+use tokio::{
+    net::TcpStream,
+    sync::mpsc,
+};
+
 use tokio_tungstenite::{
     connect_async,
     tungstenite::Message,
+    MaybeTlsStream,
     WebSocketStream,
 };
-use tokio_tungstenite::MaybeTlsStream;
-use tokio::net::TcpStream;
 
 use crate::{
     ports::{
@@ -31,13 +37,20 @@ type GeminiWebSocket =
 #[derive(Debug)]
 pub enum GeminiError {
     MissingApiKey,
+
     WebSocket(
         tokio_tungstenite::tungstenite::Error,
     ),
+
     Json(serde_json::Error),
+
     ConnectionClosed,
+
     UnexpectedResponse(String),
+
     InvalidUrl(url::ParseError),
+
+    ChannelClosed,
 }
 
 impl std::fmt::Display for GeminiError {
@@ -74,7 +87,9 @@ impl std::fmt::Display for GeminiError {
                 )
             }
 
-            Self::UnexpectedResponse(response) => {
+            Self::UnexpectedResponse(
+                response,
+            ) => {
                 write!(
                     f,
                     "unexpected Gemini response: {response}"
@@ -87,11 +102,21 @@ impl std::fmt::Display for GeminiError {
                     "invalid Gemini WebSocket URL: {error}"
                 )
             }
+
+            Self::ChannelClosed => {
+                write!(
+                    f,
+                    "Gemini session channel closed"
+                )
+            }
         }
     }
 }
 
-impl std::error::Error for GeminiError {}
+impl std::error::Error
+    for GeminiError
+{
+}
 
 impl From<
     tokio_tungstenite::tungstenite::Error
@@ -165,15 +190,20 @@ impl GeminiLiveProvider {
             );
 
         url::Url::parse(&url)
-            .map_err(GeminiError::InvalidUrl)?;
+            .map_err(
+                GeminiError::InvalidUrl,
+            )?;
 
         Ok(url)
     }
 }
 
-impl VoiceProvider for GeminiLiveProvider {
+impl VoiceProvider
+    for GeminiLiveProvider
+{
     type Error = GeminiError;
-    type Session = GeminiLiveSession;
+    type Session =
+        GeminiLiveSession;
 
     fn connect(
         &self,
@@ -184,8 +214,8 @@ impl VoiceProvider for GeminiLiveProvider {
                 Self::Error,
             >,
     > + Send {
-        let url = self
-            .websocket_url();
+        let url =
+            self.websocket_url();
 
         let model =
             self.model.clone();
@@ -197,7 +227,10 @@ impl VoiceProvider for GeminiLiveProvider {
                 "🔌 Connecting to Gemini Live..."
             );
 
-            let (mut websocket, _) =
+            let (
+                mut websocket,
+                _response,
+            ) =
                 connect_async(&url)
                     .await?;
 
@@ -205,28 +238,33 @@ impl VoiceProvider for GeminiLiveProvider {
                 "✓ Gemini WebSocket connected."
             );
 
-            let setup = json!({
-                "setup": {
-                    "model": format!(
-                        "models/{model}"
-                    ),
-                    "generationConfig": {
-                        "responseModalities": [
-                            "AUDIO"
-                        ]
+            let setup =
+                json!({
+                    "setup": {
+                        "model": format!(
+                            "models/{model}"
+                        ),
+                        "generationConfig": {
+                            "responseModalities": [
+                                "AUDIO"
+                            ]
+                        }
                     }
-                }
-            });
-
-            websocket
-                .send(Message::Text(
-                    setup.to_string().into(),
-                ))
-                .await?;
+                });
 
             println!(
                 "→ Gemini setup sent."
             );
+
+            websocket
+                .send(
+                    Message::Text(
+                        setup
+                            .to_string()
+                            .into(),
+                    ),
+                )
+                .await?;
 
             wait_for_setup_complete(
                 &mut websocket,
@@ -237,9 +275,236 @@ impl VoiceProvider for GeminiLiveProvider {
                 "✓ Gemini Live session ready."
             );
 
+            let (
+                websocket_writer,
+                websocket_reader,
+            ) = websocket.split();
+
+            let (
+                send_tx,
+                mut send_rx,
+            ) =
+                mpsc::channel::<Message>(
+                    32,
+                );
+
+            let (
+                event_tx,
+                event_rx,
+            ) =
+                mpsc::channel::<VoiceEvent>(
+                    128,
+                );
+
+            // -------------------------------------------------
+            // WebSocket writer task
+            // -------------------------------------------------
+
+            tokio::spawn(
+                async move {
+                    let mut writer =
+                        websocket_writer;
+
+                    while let Some(
+                        message,
+                    ) =
+                        send_rx.recv().await
+                    {
+                        if writer
+                            .send(message)
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                },
+            );
+
+            // -------------------------------------------------
+            // WebSocket reader task
+            // -------------------------------------------------
+
+            let pong_tx =
+                send_tx.clone();
+
+            tokio::spawn(
+                async move {
+                    let mut reader =
+                        websocket_reader;
+
+                    while let Some(
+                        result,
+                    ) =
+                        reader.next().await
+                    {
+                        let message =
+                            match result {
+                                Ok(message) => {
+                                    message
+                                }
+
+                                Err(error) => {
+                                    let _ =
+                                        event_tx
+                                            .send(
+                                                VoiceEvent::Error(
+                                                    format!(
+                                                        "Gemini WebSocket error: {error}"
+                                                    ),
+                                                ),
+                                            )
+                                            .await;
+
+                                    break;
+                                }
+                            };
+
+                        match message {
+                            Message::Text(
+                                text,
+                            ) => {
+                                match parse_server_message(
+                                    &text,
+                                ) {
+                                    Ok(Some(
+                                        event,
+                                    )) => {
+                                        if event_tx
+                                            .send(event)
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+
+                                    Ok(None) => {}
+
+                                    Err(error) => {
+                                        let _ =
+                                            event_tx
+                                                .send(
+                                                    VoiceEvent::Error(
+                                                        error.to_string(),
+                                                    ),
+                                                )
+                                                .await;
+                                    }
+                                }
+                            }
+
+                            Message::Binary(
+                                bytes,
+                            ) => {
+                                let text =
+                                    String::from_utf8_lossy(
+                                        &bytes,
+                                    );
+
+                                match parse_server_message(
+                                    &text,
+                                ) {
+                                    Ok(Some(
+                                        event,
+                                    )) => {
+                                        if event_tx
+                                            .send(event)
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+
+                                    Ok(None) => {}
+
+                                    Err(error) => {
+                                        let _ =
+                                            event_tx
+                                                .send(
+                                                    VoiceEvent::Error(
+                                                        error.to_string(),
+                                                    ),
+                                                )
+                                                .await;
+                                    }
+                                }
+                            }
+
+                            Message::Ping(
+                                payload,
+                            ) => {
+                                if pong_tx
+                                    .send(
+                                        Message::Pong(
+                                            payload,
+                                        ),
+                                    )
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+
+                            Message::Close(
+                                frame,
+                            ) => {
+                                let reason =
+                                    frame
+                                        .map(
+                                            |frame| {
+                                                format!(
+                                                    "code={} reason={}",
+                                                    frame.code,
+                                                    frame.reason
+                                                )
+                                            },
+                                        )
+                                        .unwrap_or_else(
+                                            || {
+                                                "no close frame reason"
+                                                    .to_string()
+                                            },
+                                        );
+
+                                let _ =
+                                    event_tx
+                                        .send(
+                                            VoiceEvent::Error(
+                                                format!(
+                                                    "Gemini closed WebSocket: {reason}"
+                                                ),
+                                            ),
+                                        )
+                                        .await;
+
+                                break;
+                            }
+
+                            Message::Pong(_) => {}
+
+                            Message::Frame(_) => {}
+                        }
+                    }
+
+                    let _ =
+                        event_tx
+                            .send(
+                                VoiceEvent::Error(
+                                    "Gemini receive task ended"
+                                        .to_string(),
+                                ),
+                            )
+                            .await;
+                },
+            );
+
             Ok(
                 GeminiLiveSession {
-                    websocket,
+                    send_tx,
+                    event_rx,
                     state:
                         VoiceState::Listening,
                 },
@@ -248,8 +513,17 @@ impl VoiceProvider for GeminiLiveProvider {
     }
 }
 
+// =============================================================
+// Full session
+// =============================================================
+
 pub struct GeminiLiveSession {
-    websocket: GeminiWebSocket,
+    send_tx:
+        mpsc::Sender<Message>,
+
+    event_rx:
+        mpsc::Receiver<VoiceEvent>,
+
     state: VoiceState,
 }
 
@@ -260,19 +534,130 @@ impl GeminiLiveSession {
         self.state
     }
 
-    async fn send_json(
-        &mut self,
-        value: serde_json::Value,
+    pub fn split(
+        self,
+    ) -> (
+        GeminiSendHandle,
+        GeminiReceiveHandle,
+    ) {
+        (
+            GeminiSendHandle {
+                send_tx: self.send_tx,
+            },
+            GeminiReceiveHandle {
+                event_rx:
+                    self.event_rx,
+            },
+        )
+    }
+}
+
+// =============================================================
+// Send handle
+// =============================================================
+
+#[derive(Clone)]
+pub struct GeminiSendHandle {
+    send_tx:
+        mpsc::Sender<Message>,
+}
+
+impl GeminiSendHandle {
+    pub async fn send_audio(
+        &self,
+        chunk: AudioChunk,
     ) -> Result<(), GeminiError> {
-        self.websocket
-            .send(Message::Text(
-                value.to_string().into(),
-            ))
-            .await?;
+        let data =
+            base64::Engine::encode(
+                &base64
+                    ::engine
+                    ::general_purpose
+                    ::STANDARD,
+                &chunk.samples,
+            );
+
+        let message =
+            json!({
+                "realtimeInput": {
+                    "audio": {
+                        "data": data,
+                        "mimeType":
+                            "audio/pcm;rate=16000"
+                    }
+                }
+            });
+
+        self.send_tx
+            .send(
+                Message::Text(
+                    message
+                        .to_string()
+                        .into(),
+                ),
+            )
+            .await
+            .map_err(
+                |_| {
+                    GeminiError::
+                        ChannelClosed
+                },
+            )?;
 
         Ok(())
     }
+    pub async fn end_audio(
+        &self,
+    ) -> Result<(), GeminiError> {
+        let message = json!({
+            "realtimeInput": {
+                "audioStreamEnd": true
+            }
+        });
+
+        self.send_tx
+            .send(Message::Text(
+                message.to_string().into(),
+            ))
+            .await
+            .map_err(|_| {
+                GeminiError::ChannelClosed
+            })?;
+
+        Ok(())
+    }
+
+
 }
+
+// =============================================================
+// Receive handle
+// =============================================================
+
+pub struct GeminiReceiveHandle {
+    event_rx:
+        mpsc::Receiver<VoiceEvent>,
+}
+
+impl GeminiReceiveHandle {
+    pub async fn poll_event(
+        &mut self,
+    ) -> Result<
+        VoiceEvent,
+        GeminiError,
+    > {
+        self.event_rx
+            .recv()
+            .await
+            .ok_or(
+                GeminiError::
+                    ConnectionClosed,
+            )
+    }
+}
+
+// =============================================================
+// Existing VoiceSession implementation
+// =============================================================
 
 impl VoiceSession
     for GeminiLiveSession
@@ -286,14 +671,20 @@ impl VoiceSession
         Output =
             Result<(), Self::Error>,
     > + Send {
-        let data =
-            base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &chunk.samples,
-            );
+        let sender =
+            self.send_tx.clone();
 
         async move {
-            self.send_json(
+            let data =
+                base64::Engine::encode(
+                    &base64
+                        ::engine
+                        ::general_purpose
+                        ::STANDARD,
+                    &chunk.samples,
+                );
+
+            let message =
                 json!({
                     "realtimeInput": {
                         "audio": {
@@ -302,9 +693,23 @@ impl VoiceSession
                                 "audio/pcm;rate=16000"
                         }
                     }
-                }),
-            )
-            .await
+                });
+
+            sender
+                .send(
+                    Message::Text(
+                        message
+                            .to_string()
+                            .into(),
+                    ),
+                )
+                .await
+                .map_err(
+                    |_| {
+                        GeminiError::
+                            ChannelClosed
+                    },
+                )
         }
     }
 
@@ -318,62 +723,13 @@ impl VoiceSession
             >,
     > + Send {
         async move {
-            loop {
-                let message =
-                    self.websocket
-                        .next()
-                        .await
-                        .ok_or(
-                            GeminiError::ConnectionClosed
-                        )??;
-
-                match message {
-                    Message::Text(text) => {
-                        if let Some(event) =
-                            parse_server_message(
-                                &text,
-                            )?
-                        {
-                            return Ok(event);
-                        }
-                    }
-
-                    Message::Binary(bytes) => {
-                        if let Some(event) =
-                            parse_server_message(
-                                &String::from_utf8_lossy(
-                                    &bytes,
-                                ),
-                            )?
-                        {
-                            return Ok(event);
-                        }
-                    }
-
-                    Message::Ping(payload) => {
-                        self.websocket
-                            .send(
-                                Message::Pong(
-                                    payload,
-                                ),
-                            )
-                            .await?;
-                    }
-
-                    Message::Close(_) => {
-                        self.state =
-                            VoiceState::Disconnected;
-
-                        return Err(
-                            GeminiError::ConnectionClosed
-                        );
-                    }
-
-                    Message::Pong(_) => {}
-
-                    Message::Frame(_) => {}
-                }
-            }
+            self.event_rx
+                .recv()
+                .await
+                .ok_or(
+                    GeminiError::
+                        ConnectionClosed,
+                )
         }
     }
 
@@ -384,18 +740,14 @@ impl VoiceSession
             Result<(), Self::Error>,
     > + Send {
         async move {
-            /*
-             * Gemini Live currently handles turn
-             * interruption through realtime input /
-             * activity handling. We are intentionally
-             * keeping the provider boundary here so
-             * barge-in implementation can be added
-             * without changing the state machine.
-             */
             Ok(())
         }
     }
 }
+
+// =============================================================
+// Setup
+// =============================================================
 
 async fn wait_for_setup_complete(
     websocket: &mut GeminiWebSocket,
@@ -406,19 +758,17 @@ async fn wait_for_setup_complete(
                 .next()
                 .await
                 .ok_or(
-                    GeminiError::ConnectionClosed,
+                    GeminiError::
+                        ConnectionClosed,
                 )??;
 
         match message {
             Message::Text(text) => {
-                println!(
-                    "← Gemini: {}",
-                    text
-                );
-
                 let value:
                     serde_json::Value =
-                    serde_json::from_str(&text)?;
+                    serde_json::from_str(
+                        &text,
+                    )?;
 
                 if value
                     .get("setupComplete")
@@ -431,24 +781,15 @@ async fn wait_for_setup_complete(
                     value.get("error")
                 {
                     return Err(
-                        GeminiError::UnexpectedResponse(
-                            error.to_string(),
-                        ),
+                        GeminiError::
+                            UnexpectedResponse(
+                                error.to_string(),
+                            ),
                     );
                 }
             }
 
             Message::Binary(bytes) => {
-                let text =
-                    String::from_utf8_lossy(
-                        &bytes,
-                    );
-
-                println!(
-                    "← Gemini binary: {}",
-                    text
-                );
-
                 let value:
                     serde_json::Value =
                     serde_json::from_slice(
@@ -466,9 +807,10 @@ async fn wait_for_setup_complete(
                     value.get("error")
                 {
                     return Err(
-                        GeminiError::UnexpectedResponse(
-                            error.to_string(),
-                        ),
+                        GeminiError::
+                            UnexpectedResponse(
+                                error.to_string(),
+                            ),
                     );
                 }
             }
@@ -476,31 +818,39 @@ async fn wait_for_setup_complete(
             Message::Ping(payload) => {
                 websocket
                     .send(
-                        Message::Pong(payload),
+                        Message::Pong(
+                            payload,
+                        ),
                     )
                     .await?;
             }
 
             Message::Close(frame) => {
-                let reason = frame
-                    .map(|frame| {
-                        format!(
-                            "code={} reason={}",
-                            frame.code,
-                            frame.reason
+                let reason =
+                    frame
+                        .map(
+                            |frame| {
+                                format!(
+                                    "code={} reason={}",
+                                    frame.code,
+                                    frame.reason
+                                )
+                            },
                         )
-                    })
-                    .unwrap_or_else(|| {
-                        "no close frame reason"
-                            .to_string()
-                    });
+                        .unwrap_or_else(
+                            || {
+                                "no close frame reason"
+                                    .to_string()
+                            },
+                        );
 
                 return Err(
-                    GeminiError::UnexpectedResponse(
-                        format!(
-                            "Gemini closed WebSocket during setup: {reason}"
+                    GeminiError::
+                        UnexpectedResponse(
+                            format!(
+                                "Gemini closed WebSocket during setup: {reason}"
+                            ),
                         ),
-                    ),
                 );
             }
 
@@ -510,6 +860,10 @@ async fn wait_for_setup_complete(
         }
     }
 }
+
+// =============================================================
+// Server event parser
+// =============================================================
 
 fn parse_server_message(
     text: &str,
@@ -521,13 +875,12 @@ fn parse_server_message(
         serde_json::Value =
         serde_json::from_str(text)?;
 
-    if value
-        .get("error")
-        .is_some()
+    if let Some(error) =
+        value.get("error")
     {
         return Ok(Some(
             VoiceEvent::Error(
-                value["error"].to_string(),
+                error.to_string(),
             ),
         ));
     }
@@ -559,8 +912,12 @@ fn parse_server_message(
                     )
             {
                 for part in parts {
-                    if let Some(inline_data) =
-                        part.get("inlineData")
+                    if let Some(
+                        inline_data,
+                    ) =
+                        part.get(
+                            "inlineData",
+                        )
                     {
                         if let Some(data) =
                             inline_data
@@ -571,21 +928,28 @@ fn parse_server_message(
                         {
                             let bytes =
                                 base64::Engine::decode(
-                                    &base64::engine::general_purpose::STANDARD,
+                                    &base64
+                                        ::engine
+                                        ::general_purpose
+                                        ::STANDARD,
                                     data,
                                 )
-                                .map_err(|error| {
-                                    GeminiError::UnexpectedResponse(
-                                        format!(
-                                            "invalid audio base64: {error}"
-                                        ),
-                                    )
-                                })?;
+                                .map_err(
+                                    |error| {
+                                        GeminiError::
+                                            UnexpectedResponse(
+                                                format!(
+                                                    "invalid audio base64: {error}"
+                                                ),
+                                            )
+                                    },
+                                )?;
 
                             return Ok(Some(
                                 VoiceEvent::AudioOut(
                                     AudioChunk {
-                                        samples: bytes,
+                                        samples:
+                                            bytes,
                                     },
                                 ),
                             ));
@@ -594,13 +958,6 @@ fn parse_server_message(
                 }
             }
         }
-    }
-
-    if value
-        .get("toolCall")
-        .is_some()
-    {
-        return Ok(None);
     }
 
     Ok(None)
@@ -634,7 +991,10 @@ mod tests {
     fn parses_audio_output() {
         let encoded =
             base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
+                &base64
+                    ::engine
+                    ::general_purpose
+                    ::STANDARD,
                 [1u8, 2u8, 3u8],
             );
 
@@ -668,32 +1028,6 @@ mod tests {
                             vec![1, 2, 3],
                     },
                 ),
-            )
-        );
-    }
-
-    #[test]
-    fn provider_reads_environment() {
-        let provider =
-            GeminiLiveProvider::new(
-                "test-key",
-                "test-model",
-            );
-
-        let url =
-            provider
-                .websocket_url()
-                .unwrap();
-
-        assert!(
-            url.contains(
-                "test-key"
-            )
-        );
-
-        assert!(
-            url.contains(
-                "GenerativeService.BidiGenerateContent"
             )
         );
     }

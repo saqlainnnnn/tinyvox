@@ -2,43 +2,104 @@ use std::time::Duration;
 
 use audio::CpalAudioStreamer;
 use dotenvy::dotenv;
-use tokio::time::{
-    sleep,
-    timeout,
+use tokio::{
+    time::{
+        sleep,
+        timeout,
+    },
 };
 use voice_command::{
+    AudioChunk,
     GeminiLiveProvider,
     VoiceEvent,
     VoiceProvider,
-    VoiceSession,
+    gemini::{
+        GeminiReceiveHandle,
+        GeminiSendHandle,
+    },
 };
 
 #[tokio::main]
 async fn main()
-    -> Result<(), Box<dyn std::error::Error>>
+    -> Result<
+        (),
+        Box<dyn std::error::Error + Send + Sync>,
+    >
 {
     dotenv().ok();
 
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(
-            |_| "failed to install rustls crypto provider",
-        )?;
-
-    println!(
-        "🔌 Connecting to Gemini Live..."
-    );
+    if rustls::crypto::CryptoProvider::get_default()
+        .is_none()
+    {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .map_err(
+                |_| {
+                    "failed to install rustls crypto provider"
+                },
+            )?;
+    }
 
     let provider =
         GeminiLiveProvider::from_env()?;
 
-    let mut session =
+    let session =
         provider.connect().await?;
 
     println!(
         "✓ Gemini Live session ready."
     );
 
+    let (
+        send_handle,
+        receive_handle,
+    ) = session.split();
+
+    let sender =
+        tokio::spawn(
+            microphone_task(
+                send_handle,
+            ),
+        );
+
+    let receiver =
+        tokio::spawn(
+            receiver_task(
+                receive_handle,
+            ),
+        );
+
+    let (
+        chunks_sent,
+        bytes_sent,
+    ) = sender.await??;
+
+    println!(
+        "✓ Sent {} microphone chunks / {} bytes.",
+        chunks_sent,
+        bytes_sent,
+    );
+
+    let (
+        audio_bytes,
+        turns,
+    ) = receiver.await??;
+
+    println!(
+        "✓ Received {} bytes of Gemini audio across {} turns.",
+        audio_bytes,
+        turns,
+    );
+
+    Ok(())
+}
+
+async fn microphone_task(
+    send_handle: GeminiSendHandle,
+) -> Result<
+    (usize, usize),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let mut microphone =
         CpalAudioStreamer::new()?;
 
@@ -61,11 +122,12 @@ async fn main()
             microphone.read_chunk()?;
 
         if !chunk.is_empty() {
-            let size = chunk.len();
+            let size =
+                chunk.len();
 
-            session
+            send_handle
                 .send_audio(
-                    voice_command::AudioChunk {
+                    AudioChunk {
                         samples: chunk,
                     },
                 )
@@ -73,41 +135,6 @@ async fn main()
 
             chunks_sent += 1;
             bytes_sent += size;
-
-            println!(
-                "→ Sent microphone chunk: {} bytes",
-                size
-            );
-        }
-
-        while let Some(event) =
-            poll_without_blocking(
-                &mut session,
-            )
-            .await?
-        {
-            match event {
-                VoiceEvent::AudioOut(chunk) => {
-                    println!(
-                        "← Gemini audio: {} bytes",
-                        chunk.samples.len()
-                    );
-                }
-
-                VoiceEvent::TurnComplete => {
-                    println!(
-                        "✓ Turn complete."
-                    );
-                }
-
-                VoiceEvent::Error(error) => {
-                    eprintln!(
-                        "Gemini error: {error}"
-                    );
-                }
-
-                _ => {}
-            }
         }
 
         sleep(
@@ -122,31 +149,77 @@ async fn main()
         "✓ Microphone stream stopped."
     );
 
+    send_handle
+        .end_audio()
+        .await?;
+
     println!(
-        "✓ Sent {} chunks / {} bytes to Gemini.",
-        chunks_sent,
-        bytes_sent
+        "→ Sent audioStreamEnd to Gemini."
     );
 
-    Ok(())
+    Ok((
+        chunks_sent,
+        bytes_sent,
+    ))
 }
 
-async fn poll_without_blocking<V>(
-    session: &mut V,
+async fn receiver_task(
+    mut receive_handle: GeminiReceiveHandle,
 ) -> Result<
-    Option<VoiceEvent>,
-    Box<dyn std::error::Error>,
->
-where
-    V: VoiceSession,
-    V::Error: std::error::Error + 'static,
-{
-    timeout(
-        Duration::from_millis(1),
-        session.poll_event(),
-    )
-    .await
-    .ok()
-    .transpose()
-    .map_err(Into::into)
+    (usize, usize),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let mut audio_bytes = 0usize;
+    let mut turns = 0usize;
+
+    loop {
+        let event = timeout(
+            Duration::from_secs(20),
+            receive_handle.poll_event(),
+        )
+        .await
+        .map_err(
+            |_| {
+                "timed out waiting for Gemini response"
+            },
+        )??;
+
+        match event {
+            VoiceEvent::AudioOut(chunk) => {
+                audio_bytes +=
+                    chunk.samples.len();
+
+                println!(
+                    "← Gemini audio: {} bytes",
+                    chunk.samples.len()
+                );
+            }
+
+            VoiceEvent::TurnComplete => {
+                turns += 1;
+
+                println!(
+                    "✓ Turn complete."
+                );
+
+                break;
+            }
+
+            VoiceEvent::Error(error) => {
+                return Err(
+                    format!(
+                        "Gemini error: {error}"
+                    )
+                    .into(),
+                );
+            }
+
+            _ => {}
+        }
+    }
+
+    Ok((
+        audio_bytes,
+        turns,
+    ))
 }
