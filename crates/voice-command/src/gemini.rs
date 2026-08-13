@@ -104,25 +104,21 @@ impl GeminiLiveProvider {
     }
 
     fn websocket_url(&self) -> Result<String, GeminiError> {
-        let url = format!(
-            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={}",
-            self.api_key
-        );
-
-        url::Url::parse(&url).map_err(GeminiError::InvalidUrl)?;
-
-        Ok(url)
+        build_websocket_url(&self.api_key)
     }
 }
 
 impl VoiceProvider for GeminiLiveProvider {
     type Error = GeminiError;
+
     type Session = GeminiLiveSession;
 
     fn connect(
         &self,
     ) -> impl std::future::Future<Output = Result<Self::Session, Self::Error>> + Send {
         let url = self.websocket_url();
+
+        let api_key = self.api_key.clone();
 
         let model = self.model.clone();
 
@@ -135,93 +131,7 @@ impl VoiceProvider for GeminiLiveProvider {
 
             println!("✓ Gemini WebSocket connected.");
 
-            let setup = json!({
-                "setup": {
-                    "model": format!(
-                        "models/{model}"
-                    ),
-
-                    "generationConfig": {
-                        "responseModalities": [
-                            "AUDIO"
-                        ]
-                    },
-
-                    /*
-                     * Manual VAD.
-                     *
-                     * The client decides when user activity
-                     * starts and ends.
-                     */
-                    "realtimeInputConfig": {
-                        "automaticActivityDetection": {
-                            "disabled": true
-                        },
-
-                        /*
-                         * When a new client activity begins,
-                         * interrupt the current model response.
-                         */
-                        "activityHandling":
-                            "START_OF_ACTIVITY_INTERRUPTS"
-                    },
-
-                    "tools": [
-                        {
-                            "functionDeclarations": [
-                                {
-                                    "name":
-                                        "read_last_dictation",
-
-                                    "description":
-                                        "Returns the most recently injected dictation text.",
-
-                                    "parameters": {
-                                        "type":
-                                            "OBJECT"
-                                    }
-                                },
-
-                                {
-                                    "name":
-                                        "add_dictionary_entry",
-
-                                    "description":
-                                        "Adds a manual speech correction to the TinyVox dictionary.",
-
-                                    "parameters": {
-                                        "type":
-                                            "OBJECT",
-
-                                        "properties": {
-                                            "wrong": {
-                                                "type":
-                                                    "STRING",
-
-                                                "description":
-                                                    "The phrase TinyVox commonly mishears."
-                                            },
-
-                                            "correct": {
-                                                "type":
-                                                    "STRING",
-
-                                                "description":
-                                                    "The correct replacement text."
-                                            }
-                                        },
-
-                                        "required": [
-                                            "wrong",
-                                            "correct"
-                                        ]
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                }
-            });
+            let setup = build_setup(&model, None);
 
             println!("→ Gemini setup sent.");
 
@@ -233,89 +143,13 @@ impl VoiceProvider for GeminiLiveProvider {
 
             println!("✓ Gemini Live session ready.");
 
-            let (websocket_writer, websocket_reader) = websocket.split();
-
-            let (send_tx, mut send_rx) = mpsc::channel::<Message>(32);
+            let (send_tx, send_rx) = mpsc::channel::<Message>(32);
 
             let (event_tx, event_rx) = mpsc::channel::<VoiceEvent>(128);
 
-            // -------------------------------------------------
-            // Writer
-            // -------------------------------------------------
-
-            tokio::spawn(async move {
-                let mut writer = websocket_writer;
-
-                while let Some(message) = send_rx.recv().await {
-                    if writer.send(message).await.is_err() {
-                        break;
-                    }
-                }
-            });
-
-            // -------------------------------------------------
-            // Reader
-            // -------------------------------------------------
-
-            let pong_tx = send_tx.clone();
-
-            tokio::spawn(async move {
-                let mut reader = websocket_reader;
-
-                while let Some(result) = reader.next().await {
-                    let message = match result {
-                        Ok(message) => message,
-
-                        Err(error) => {
-                            let _ = event_tx
-                                .send(VoiceEvent::Error(format!(
-                                    "Gemini WebSocket error: {error}"
-                                )))
-                                .await;
-
-                            break;
-                        }
-                    };
-
-                    match message {
-                        Message::Text(text) => {
-                            handle_server_message(&text, &event_tx).await;
-                        }
-
-                        Message::Binary(bytes) => {
-                            let text = String::from_utf8_lossy(&bytes);
-
-                            handle_server_message(&text, &event_tx).await;
-                        }
-
-                        Message::Ping(payload) => {
-                            let _ = pong_tx.send(Message::Pong(payload)).await;
-                        }
-
-                        Message::Close(frame) => {
-                            let reason = frame
-                                .map(|frame| format!("code={} reason={}", frame.code, frame.reason))
-                                .unwrap_or_else(|| "no close frame reason".to_string());
-
-                            let _ = event_tx
-                                .send(VoiceEvent::Error(format!(
-                                    "Gemini closed WebSocket: {reason}"
-                                )))
-                                .await;
-
-                            break;
-                        }
-
-                        Message::Pong(_) => {}
-
-                        Message::Frame(_) => {}
-                    }
-                }
-
-                let _ = event_tx
-                    .send(VoiceEvent::Error("Gemini receive task ended".to_string()))
-                    .await;
-            });
+            tokio::spawn(run_gemini_transport(
+                websocket, api_key, model, send_rx, event_tx,
+            ));
 
             Ok(GeminiLiveSession {
                 send_tx,
@@ -514,6 +348,381 @@ impl VoiceSession for GeminiLiveSession {
     fn interrupt(&mut self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
+}
+
+// =============================================================
+// Persistent Gemini transport
+// =============================================================
+
+async fn run_gemini_transport(
+    mut websocket: GeminiWebSocket,
+
+    api_key: String,
+
+    model: String,
+
+    mut send_rx: mpsc::Receiver<Message>,
+
+    event_tx: mpsc::Sender<VoiceEvent>,
+) {
+    let mut resume_handle: Option<String> = None;
+
+    loop {
+        match run_connection(&mut websocket, &mut send_rx, &event_tx, &mut resume_handle).await {
+            Ok(()) => {
+                println!("🛑 Gemini transport stopped.");
+
+                break;
+            }
+
+            Err(error) => {
+                eprintln!("⚠ Gemini connection lost: {error}");
+
+                if send_rx.is_closed() {
+                    break;
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                loop {
+                    match connect_gemini(&api_key).await {
+                        Ok((mut new_websocket, _response)) => {
+                            let setup = build_setup(&model, resume_handle.as_deref());
+
+                            if let Err(error) = new_websocket
+                                .send(Message::Text(setup.to_string().into()))
+                                .await
+                            {
+                                eprintln!("⚠ Failed to send reconnect setup: {error}");
+
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                                continue;
+                            }
+
+                            match wait_for_setup_complete(&mut new_websocket).await {
+                                Ok(()) => {
+                                    websocket = new_websocket;
+
+                                    println!("✓ Gemini session reconnected.");
+
+                                    break;
+                                }
+
+                                Err(error) => {
+                                    eprintln!("⚠ Gemini resume setup failed: {error}");
+
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                }
+                            }
+                        }
+
+                        Err(error) => {
+                            eprintln!("⚠ Gemini reconnect failed: {error}");
+
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                    }
+
+                    if send_rx.is_closed() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn connect_gemini(
+    api_key: &str,
+) -> Result<
+    (
+        GeminiWebSocket,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    GeminiError,
+> {
+    let url = build_websocket_url(api_key)?;
+
+    Ok(connect_async(url).await?)
+}
+
+async fn run_connection(
+    websocket: &mut GeminiWebSocket,
+
+    send_rx: &mut mpsc::Receiver<Message>,
+
+    event_tx: &mpsc::Sender<VoiceEvent>,
+
+    resume_handle: &mut Option<String>,
+) -> Result<(), GeminiError> {
+    loop {
+        tokio::select! {
+            outbound =
+                send_rx.recv()
+                => {
+                match outbound {
+                    Some(message) => {
+                        websocket
+                            .send(message)
+                            .await?;
+                    }
+
+                    None => {
+                        return Ok(());
+                    }
+                }
+            }
+
+            inbound =
+                websocket.next()
+                => {
+                let message =
+                    match inbound {
+                        Some(Ok(message)) => {
+                            message
+                        }
+
+                        Some(Err(error)) => {
+                            return Err(
+                                GeminiError::WebSocket(
+                                    error,
+                                )
+                            );
+                        }
+
+                        None => {
+                            return Err(
+                                GeminiError::ConnectionClosed,
+                            );
+                        }
+                    };
+
+                match message {
+                    Message::Text(text) => {
+                        capture_transport_control(
+                            &text,
+                            resume_handle,
+                        );
+
+                        handle_server_message(
+                            &text,
+                            event_tx,
+                        )
+                        .await;
+                    }
+
+                    Message::Binary(bytes) => {
+                        let text =
+                            String::from_utf8_lossy(
+                                &bytes,
+                            );
+
+                        capture_transport_control(
+                            &text,
+                            resume_handle,
+                        );
+
+                        handle_server_message(
+                            &text,
+                            event_tx,
+                        )
+                        .await;
+                    }
+
+                    Message::Ping(payload) => {
+                        websocket
+                            .send(
+                                Message::Pong(
+                                    payload,
+                                ),
+                            )
+                            .await?;
+                    }
+
+                    Message::Pong(_) => {}
+
+                    Message::Close(frame) => {
+                        let reason =
+                            frame
+                                .map(
+                                    |frame| {
+                                        format!(
+                                            "code={} reason={}",
+                                            frame.code,
+                                            frame.reason
+                                        )
+                                    },
+                                )
+                                .unwrap_or_else(
+                                    || {
+                                        "no close frame reason"
+                                            .to_string()
+                                    },
+                                );
+
+                        return Err(
+                            GeminiError::
+                                UnexpectedResponse(
+                                    format!(
+                                        "connection closed: {reason}"
+                                    ),
+                                ),
+                        );
+                    }
+
+                    Message::Frame(_) => {}
+                }
+            }
+        }
+    }
+}
+
+fn capture_transport_control(text: &str, resume_handle: &mut Option<String>) {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return;
+    };
+
+    if let Some(update) = value.get("sessionResumptionUpdate") {
+        if let Some(handle) = update.get("newHandle").and_then(Value::as_str) {
+            *resume_handle = Some(handle.to_string());
+
+            println!("🔐 Gemini resumption handle updated.");
+        }
+    }
+
+    if let Some(go_away) = value.get("goAway") {
+        if let Some(time_left) = go_away.get("timeLeft").and_then(Value::as_str) {
+            println!("⚠ Gemini GoAway received; time left: {time_left}");
+        } else {
+            println!("⚠ Gemini GoAway received.");
+        }
+    }
+}
+
+// =============================================================
+// Setup
+// =============================================================
+
+fn build_setup(model: &str, resume_handle: Option<&str>) -> Value {
+    let session_resumption = match resume_handle {
+        Some(handle) => {
+            json!({
+                "handle": handle
+            })
+        }
+
+        None => {
+            json!({
+                "transparent": true
+            })
+        }
+    };
+
+    json!({
+        "setup": {
+            "model":
+                format!("models/{model}"),
+
+            "generationConfig": {
+                "responseModalities": [
+                    "AUDIO"
+                ]
+            },
+
+            /*
+             * Allow long-running sessions to use context
+             * window compression instead of ending because
+             * the accumulated context becomes too large.
+             */
+            "contextWindowCompression": {},
+
+            /*
+             * Manual VAD for deterministic client-side
+             * barge-in.
+             */
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {
+                    "disabled": true
+                },
+
+                "activityHandling":
+                    "START_OF_ACTIVITY_INTERRUPTS"
+            },
+
+            /*
+             * Session resumption lets us reconnect the
+             * WebSocket without losing the logical session.
+             */
+            "sessionResumption":
+                session_resumption,
+
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name":
+                                "read_last_dictation",
+
+                            "description":
+                                "Returns the most recently injected dictation text.",
+
+                            "parameters": {
+                                "type":
+                                    "OBJECT"
+                            }
+                        },
+
+                        {
+                            "name":
+                                "add_dictionary_entry",
+
+                            "description":
+                                "Adds a manual speech correction to the TinyVox dictionary.",
+
+                            "parameters": {
+                                "type":
+                                    "OBJECT",
+
+                                "properties": {
+                                    "wrong": {
+                                        "type":
+                                            "STRING",
+
+                                        "description":
+                                            "The phrase TinyVox commonly mishears."
+                                    },
+
+                                    "correct": {
+                                        "type":
+                                            "STRING",
+
+                                        "description":
+                                            "The correct replacement text."
+                                    }
+                                },
+
+                                "required": [
+                                    "wrong",
+                                    "correct"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    })
+}
+
+fn build_websocket_url(api_key: &str) -> Result<String, GeminiError> {
+    let url = format!(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
+    );
+
+    url::Url::parse(&url).map_err(GeminiError::InvalidUrl)?;
+
+    Ok(url)
 }
 
 // =============================================================
