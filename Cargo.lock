@@ -326,9 +326,11 @@ dependencies = [
  "audio",
  "cleanup",
  "dotenvy",
+ "rustls",
  "stt-pulse",
  "tinyvox-engine",
  "tokio",
+ "voice-command",
  "win",
 ]
 

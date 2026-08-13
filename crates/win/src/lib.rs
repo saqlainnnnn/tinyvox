@@ -1,17 +1,15 @@
+pub mod credentials;
 pub mod foreground;
 pub mod injection;
-
-pub mod credentials;
-
 pub mod overlay;
-
-pub use overlay::{OverlayError, OverlayState, WindowsOverlay};
 
 pub use credentials::{CredentialError, WindowsCredentials};
 
 pub use foreground::{ForegroundError, ForegroundWindow, WindowsForeground};
 
 pub use injection::{InjectionError, WindowsTextInjector};
+
+pub use overlay::{OverlayError, OverlayState, WindowsOverlay};
 
 use std::{
     cell::{Cell, RefCell},
@@ -30,26 +28,48 @@ use windows::Win32::{
 };
 
 const VK_F9: u32 = 0x78;
+const VK_F10: u32 = 0x79;
+
 const WM_TINYVOX_SHUTDOWN: u32 = WM_APP + 1;
 
 thread_local! {
-    static EVENT_SENDER: RefCell<Option<Sender<HotkeyEvent>>> =
-        const { RefCell::new(None) };
+    static EVENT_SENDER:
+        RefCell<Option<Sender<HotkeyEvent>>> =
+        const {
+            RefCell::new(None)
+        };
 
-    static F9_DOWN: Cell<bool> =
-        const { Cell::new(false) };
+    static F9_DOWN:
+        Cell<bool> =
+        const {
+            Cell::new(false)
+        };
+
+    static F10_DOWN:
+        Cell<bool> =
+        const {
+            Cell::new(false)
+        };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
+    /// F9 key-down.
     Pressed,
+
+    /// F9 key-up.
     Released,
+
+    /// F10 toggles voice-command mode.
+    VoiceCommandToggled,
 }
 
 #[derive(Debug)]
 pub enum HotkeyError {
     HookInstallation(windows::core::Error),
+
     ThreadStartup,
+
     ThreadDisconnected,
 }
 
@@ -75,13 +95,16 @@ impl std::error::Error for HotkeyError {}
 
 pub struct WindowsHotkey {
     events: Receiver<HotkeyEvent>,
+
     thread_id: u32,
+
     thread: Option<JoinHandle<()>>,
 }
 
 impl WindowsHotkey {
     pub fn new() -> Result<Self, HotkeyError> {
         let (event_tx, event_rx) = mpsc::channel();
+
         let (startup_tx, startup_rx) = mpsc::channel();
 
         let thread = thread::spawn(move || {
@@ -106,7 +129,9 @@ impl WindowsHotkey {
 
         Ok(Self {
             events: event_rx,
+
             thread_id,
+
             thread: Some(thread),
         })
     }
@@ -146,13 +171,17 @@ impl Drop for WindowsHotkey {
 
 fn hook_thread(
     event_tx: Sender<HotkeyEvent>,
+
     startup_tx: Sender<Result<u32, windows::core::Error>>,
 ) {
     EVENT_SENDER.with(|sender| {
         *sender.borrow_mut() = Some(event_tx);
     });
 
-    // Force creation of this thread's Windows message queue.
+    /*
+     * Force creation of this thread's
+     * Windows message queue.
+     */
     let mut initial_message = MSG::default();
 
     unsafe {
@@ -166,6 +195,7 @@ fn hook_thread(
 
         Err(error) => {
             let _ = startup_tx.send(Err(error));
+
             return;
         }
     };
@@ -181,13 +211,17 @@ fn hook_thread(
             break;
         }
 
-        // We use this message only to wake the message loop.
+        /*
+         * This message only wakes the
+         * message loop for shutdown.
+         */
         if message.message == WM_TINYVOX_SHUTDOWN {
             break;
         }
 
         unsafe {
             let _ = TranslateMessage(&message);
+
             DispatchMessageW(&message);
         }
     }
@@ -195,6 +229,18 @@ fn hook_thread(
     unsafe {
         let _ = UnhookWindowsHookEx(hook);
     }
+
+    /*
+     * Reset local hotkey state before
+     * the thread terminates.
+     */
+    F9_DOWN.with(|down| {
+        down.set(false);
+    });
+
+    F10_DOWN.with(|down| {
+        down.set(false);
+    });
 
     EVENT_SENDER.with(|sender| {
         *sender.borrow_mut() = None;
@@ -205,26 +251,74 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     if code >= 0 {
         let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
 
-        if keyboard.vkCode == VK_F9 {
-            match wparam.0 as u32 {
-                WM_KEYDOWN => {
-                    F9_DOWN.with(|down| {
-                        if !down.replace(true) {
-                            send_event(HotkeyEvent::Pressed);
-                        }
-                    });
-                }
+        let message = wparam.0 as u32;
 
-                WM_KEYUP => {
-                    F9_DOWN.with(|down| {
-                        if down.replace(false) {
-                            send_event(HotkeyEvent::Released);
-                        }
-                    });
-                }
+        match keyboard.vkCode {
+            /*
+             * F9 = hold-to-record
+             */
+            VK_F9 => {
+                match message {
+                    WM_KEYDOWN => {
+                        F9_DOWN.with(|down| {
+                            /*
+                             * Ignore repeated
+                             * WM_KEYDOWN events
+                             * while held.
+                             */
+                            if !down.replace(true) {
+                                send_event(HotkeyEvent::Pressed);
+                            }
+                        });
+                    }
 
-                _ => {}
+                    WM_KEYUP => {
+                        F9_DOWN.with(|down| {
+                            /*
+                             * Only emit release
+                             * if we previously
+                             * emitted the press.
+                             */
+                            if down.replace(false) {
+                                send_event(HotkeyEvent::Released);
+                            }
+                        });
+                    }
+
+                    _ => {}
+                }
             }
+
+            /*
+             * F10 = voice-command toggle
+             */
+            VK_F10 => {
+                match message {
+                    WM_KEYDOWN => {
+                        F10_DOWN.with(|down| {
+                            /*
+                             * F10 is a toggle,
+                             * so emit exactly
+                             * one event per
+                             * physical press.
+                             */
+                            if !down.replace(true) {
+                                send_event(HotkeyEvent::VoiceCommandToggled);
+                            }
+                        });
+                    }
+
+                    WM_KEYUP => {
+                        F10_DOWN.with(|down| {
+                            down.set(false);
+                        });
+                    }
+
+                    _ => {}
+                }
+            }
+
+            _ => {}
         }
     }
 

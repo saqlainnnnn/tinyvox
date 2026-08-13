@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Duration, sleep},
 };
@@ -18,6 +18,23 @@ use crate::{
 const CHUNK_INTERVAL_MS: u64 = 40;
 const SPEECH_THRESHOLD: f32 = 0.015;
 const SILENCE_TO_END_MS: u64 = 500;
+
+// =============================================================
+// Voice agent state
+// =============================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceAgentState {
+    Listening,
+    Thinking,
+    Speaking,
+    BargeIn,
+    Stopped,
+}
+
+// =============================================================
+// Errors
+// =============================================================
 
 #[derive(Debug)]
 pub enum VoiceAgentError {
@@ -57,10 +74,18 @@ impl From<GeminiError> for VoiceAgentError {
     }
 }
 
+// =============================================================
+// Voice agent
+// =============================================================
+
 pub struct VoiceAgent {
     provider: GeminiLiveProvider,
+
     tool_registry: Option<ToolRegistry>,
+
     session: Option<AgentSession>,
+
+    state_tx: watch::Sender<VoiceAgentState>,
 }
 
 struct AgentSession {
@@ -73,15 +98,30 @@ struct AgentSession {
 
 impl VoiceAgent {
     pub fn new(provider: GeminiLiveProvider, tool_registry: ToolRegistry) -> Self {
+        let (state_tx, _state_rx) = watch::channel(VoiceAgentState::Stopped);
+
         Self {
             provider,
             tool_registry: Some(tool_registry),
             session: None,
+            state_tx,
         }
     }
 
     pub fn is_running(&self) -> bool {
         self.session.is_some()
+    }
+
+    pub fn state(&self) -> VoiceAgentState {
+        *self.state_tx.borrow()
+    }
+
+    pub fn subscribe_state(&self) -> watch::Receiver<VoiceAgentState> {
+        self.state_tx.subscribe()
+    }
+
+    fn set_state(&self, state: VoiceAgentState) {
+        let _ = self.state_tx.send(state);
     }
 
     pub async fn start(&mut self) -> Result<(), VoiceAgentError> {
@@ -95,8 +135,18 @@ impl VoiceAgent {
 
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
 
+        /*
+         * Local VAD -> receiver notification.
+         *
+         * When user speech is detected while Gemini is speaking,
+         * the receiver clears/restarts playback immediately.
+         */
         let (speech_tx, speech_rx) = mpsc::channel::<()>(8);
 
+        /*
+         * Microphone task tells receiver task when the whole
+         * agent is shutting down.
+         */
         let (receiver_stop_tx, receiver_stop_rx) = oneshot::channel::<()>();
 
         let tool_registry = self
@@ -105,6 +155,10 @@ impl VoiceAgent {
             .ok_or_else(|| VoiceAgentError::Task("tool registry unavailable".to_string()))?;
 
         let receiver_send_handle = send_handle.clone();
+
+        let state_tx = self.state_tx.clone();
+
+        self.set_state(VoiceAgentState::Listening);
 
         let sender_task = tokio::spawn(microphone_loop(
             send_handle,
@@ -119,11 +173,14 @@ impl VoiceAgent {
             tool_registry,
             speech_rx,
             receiver_stop_rx,
+            state_tx,
         ));
 
         self.session = Some(AgentSession {
             stop_tx: Some(stop_tx),
+
             sender_task,
+
             receiver_task,
         });
 
@@ -134,6 +191,8 @@ impl VoiceAgent {
 
     pub async fn stop(&mut self) -> Result<(), VoiceAgentError> {
         let Some(mut session) = self.session.take() else {
+            self.set_state(VoiceAgentState::Stopped);
+
             return Ok(());
         };
 
@@ -151,16 +210,25 @@ impl VoiceAgent {
             .await
             .map_err(|error| VoiceAgentError::Task(error.to_string()))??;
 
+        self.set_state(VoiceAgentState::Stopped);
+
         println!("🛑 Voice agent stopped.");
 
         Ok(())
     }
 }
 
+// =============================================================
+// Microphone
+// =============================================================
+
 async fn microphone_loop(
     send_handle: GeminiSendHandle,
+
     mut stop_rx: oneshot::Receiver<()>,
+
     speech_tx: mpsc::Sender<()>,
+
     receiver_stop_tx: oneshot::Sender<()>,
 ) -> Result<(), VoiceAgentError> {
     let mut microphone =
@@ -173,11 +241,16 @@ async fn microphone_loop(
     println!("🎙️ Microphone streaming...");
 
     let mut speaking = false;
+
     let mut silence_ms = 0u64;
 
     loop {
         tokio::select! {
             _ = &mut stop_rx => {
+                /*
+                 * In manual-VAD mode, close the current
+                 * activity rather than sending audioStreamEnd.
+                 */
                 if speaking {
                     send_handle
                         .end_activity()
@@ -187,8 +260,7 @@ async fn microphone_loop(
                 microphone.stop();
 
                 let _ =
-                    receiver_stop_tx
-                        .send(());
+                    receiver_stop_tx.send(());
 
                 break;
             }
@@ -212,7 +284,9 @@ async fn microphone_loop(
                 }
 
                 let rms =
-                    pcm16_rms(&chunk);
+                    pcm16_rms(
+                        &chunk,
+                    );
 
                 let speech =
                     rms >= SPEECH_THRESHOLD;
@@ -223,6 +297,11 @@ async fn microphone_loop(
                     if !speaking {
                         speaking = true;
 
+                        /*
+                         * Notify receiver BEFORE sending
+                         * activityStart so queued Gemini
+                         * speech is cleared as early as possible.
+                         */
                         let _ =
                             speech_tx
                                 .send(())
@@ -240,15 +319,20 @@ async fn microphone_loop(
                     send_handle
                         .send_audio(
                             AudioChunk {
-                                samples: chunk,
+                                samples:
+                                    chunk,
                             },
                         )
                         .await?;
                 } else if speaking {
+                    /*
+                     * Send the tail of the activity before ending it.
+                     */
                     send_handle
                         .send_audio(
                             AudioChunk {
-                                samples: chunk,
+                                samples:
+                                    chunk,
                             },
                         )
                         .await?;
@@ -271,6 +355,11 @@ async fn microphone_loop(
                         );
                     }
                 }
+
+                /*
+                 * When speaking == false, intentionally send
+                 * no realtime audio until the next activityStart.
+                 */
             }
         }
     }
@@ -278,12 +367,22 @@ async fn microphone_loop(
     Ok(())
 }
 
+// =============================================================
+// Receiver / playback
+// =============================================================
+
 async fn receiver_loop(
     send_handle: GeminiSendHandle,
+
     mut receive_handle: GeminiReceiveHandle,
+
     mut tool_registry: ToolRegistry,
+
     mut speech_rx: mpsc::Receiver<()>,
+
     mut stop_rx: oneshot::Receiver<()>,
+
+    state_tx: watch::Sender<VoiceAgentState>,
 ) -> Result<(), VoiceAgentError> {
     let mut playback =
         CpalAudioPlayback::new().map_err(|error| VoiceAgentError::Audio(error.to_string()))?;
@@ -294,10 +393,17 @@ async fn receiver_loop(
 
     println!("🔊 Speaker playback ready.");
 
+    let _ = state_tx.send(VoiceAgentState::Listening);
+
     loop {
         tokio::select! {
             _ = &mut stop_rx => {
                 playback.stop();
+
+                let _ =
+                    state_tx.send(
+                        VoiceAgentState::Stopped,
+                    );
 
                 println!(
                     "🔊 Speaker playback stopped."
@@ -309,6 +415,16 @@ async fn receiver_loop(
             Some(_) =
                 speech_rx.recv()
             => {
+                /*
+                 * Local VAD says the user has started speaking.
+                 *
+                 * Immediately cut current Gemini output.
+                 */
+                let _ =
+                    state_tx.send(
+                        VoiceAgentState::BargeIn,
+                    );
+
                 playback.stop();
 
                 playback
@@ -319,6 +435,16 @@ async fn receiver_loop(
                         )
                     })?;
 
+                /*
+                 * Go immediately back to Listening; BargeIn is
+                 * useful as a transient UI state but the microphone
+                 * is now waiting for the user's turn.
+                 */
+                let _ =
+                    state_tx.send(
+                        VoiceAgentState::Listening,
+                    );
+
                 println!(
                     "⚡ Barge-in: local VAD cleared playback."
                 );
@@ -327,12 +453,21 @@ async fn receiver_loop(
             event =
                 receive_handle.poll_event()
             => {
-                let event = event?;
+                let event =
+                    event?;
 
                 match event {
                     VoiceEvent::AudioOut(
                         chunk,
                     ) => {
+                        /*
+                         * The model is actively producing speech.
+                         */
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::Speaking,
+                            );
+
                         playback
                             .push_pcm16(
                                 &chunk.samples,
@@ -345,6 +480,11 @@ async fn receiver_loop(
                     }
 
                     VoiceEvent::Interrupted => {
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::BargeIn,
+                            );
+
                         playback.stop();
 
                         playback
@@ -355,6 +495,11 @@ async fn receiver_loop(
                                 )
                             })?;
 
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::Listening,
+                            );
+
                         println!(
                             "⚡ Barge-in: Gemini interrupted."
                         );
@@ -363,6 +508,14 @@ async fn receiver_loop(
                     VoiceEvent::ToolCall(
                         tool_call,
                     ) => {
+                        /*
+                         * Tool execution is model-side reasoning.
+                         */
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::Thinking,
+                            );
+
                         execute_tool_call(
                             &send_handle,
                             &mut tool_registry,
@@ -372,6 +525,16 @@ async fn receiver_loop(
                     }
 
                     VoiceEvent::TurnComplete => {
+                        /*
+                         * The model completed its response.
+                         * Microphone remains active and ready for
+                         * the next user activity.
+                         */
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::Listening,
+                            );
+
                         println!(
                             "✓ Voice turn complete."
                         );
@@ -382,11 +545,17 @@ async fn receiver_loop(
                     ) => {
                         playback.stop();
 
+                        let _ =
+                            state_tx.send(
+                                VoiceAgentState::Stopped,
+                            );
+
                         return Err(
                             VoiceAgentError::Gemini(
-                                GeminiError::UnexpectedResponse(
-                                    error,
-                                ),
+                                GeminiError::
+                                    UnexpectedResponse(
+                                        error,
+                                    ),
                             ),
                         );
                     }
@@ -399,6 +568,10 @@ async fn receiver_loop(
 
     Ok(())
 }
+
+// =============================================================
+// PCM RMS
+// =============================================================
 
 fn pcm16_rms(pcm: &[u8]) -> f32 {
     let mut sum = 0.0f64;
@@ -420,9 +593,15 @@ fn pcm16_rms(pcm: &[u8]) -> f32 {
     (sum / count as f64).sqrt() as f32
 }
 
+// =============================================================
+// Tools
+// =============================================================
+
 async fn execute_tool_call(
     send_handle: &GeminiSendHandle,
+
     registry: &mut ToolRegistry,
+
     tool_call: &crate::ports::ToolCall,
 ) -> Result<(), VoiceAgentError> {
     let arguments: Value = serde_json::from_str(&tool_call.arguments)

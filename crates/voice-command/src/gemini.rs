@@ -110,7 +110,6 @@ impl GeminiLiveProvider {
 
 impl VoiceProvider for GeminiLiveProvider {
     type Error = GeminiError;
-
     type Session = GeminiLiveSession;
 
     fn connect(
@@ -131,6 +130,13 @@ impl VoiceProvider for GeminiLiveProvider {
 
             println!("✓ Gemini WebSocket connected.");
 
+            /*
+             * Fresh connection:
+             *
+             * Empty sessionResumption tells Gemini that
+             * this setup participates in resumption, but
+             * there is no previous handle to resume.
+             */
             let setup = build_setup(&model, None);
 
             println!("→ Gemini setup sent.");
@@ -203,6 +209,13 @@ impl GeminiSendHandle {
         let data =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &chunk.samples);
 
+        /*
+         * Google documents realtime audio as:
+         *
+         * realtimeInput.audio
+         *
+         * with PCM at 16 kHz.
+         */
         let message = json!({
             "realtimeInput": {
                 "audio": {
@@ -368,7 +381,10 @@ async fn run_gemini_transport(
     let mut resume_handle: Option<String> = None;
 
     loop {
-        match run_connection(&mut websocket, &mut send_rx, &event_tx, &mut resume_handle).await {
+        let result =
+            run_connection(&mut websocket, &mut send_rx, &event_tx, &mut resume_handle).await;
+
+        match result {
             Ok(()) => {
                 println!("🛑 Gemini transport stopped.");
 
@@ -378,54 +394,40 @@ async fn run_gemini_transport(
             Err(error) => {
                 eprintln!("⚠ Gemini connection lost: {error}");
 
+                /*
+                 * If the application closed the send side,
+                 * don't reconnect.
+                 */
                 if send_rx.is_closed() {
                     break;
                 }
 
+                /*
+                 * Reconnect only after an actual transport
+                 * failure.
+                 */
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-                loop {
-                    match connect_gemini(&api_key).await {
-                        Ok((mut new_websocket, _response)) => {
-                            let setup = build_setup(&model, resume_handle.as_deref());
+                match reconnect_gemini(&api_key, &model, resume_handle.as_deref()).await {
+                    Ok(new_websocket) => {
+                        websocket = new_websocket;
 
-                            if let Err(error) = new_websocket
-                                .send(Message::Text(setup.to_string().into()))
-                                .await
-                            {
-                                eprintln!("⚠ Failed to send reconnect setup: {error}");
-
-                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                                continue;
-                            }
-
-                            match wait_for_setup_complete(&mut new_websocket).await {
-                                Ok(()) => {
-                                    websocket = new_websocket;
-
-                                    println!("✓ Gemini session reconnected.");
-
-                                    break;
-                                }
-
-                                Err(error) => {
-                                    eprintln!("⚠ Gemini resume setup failed: {error}");
-
-                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                }
-                            }
-                        }
-
-                        Err(error) => {
-                            eprintln!("⚠ Gemini reconnect failed: {error}");
-
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        }
+                        println!("✓ Gemini session reconnected.");
                     }
 
-                    if send_rx.is_closed() {
-                        return;
+                    Err(reconnect_error) => {
+                        eprintln!("⚠ Gemini reconnect failed: {reconnect_error}");
+
+                        /*
+                         * Do NOT spin forever on a malformed
+                         * session/setup. Surface the error to
+                         * VoiceAgent and stop this transport.
+                         */
+                        let _ = event_tx
+                            .send(VoiceEvent::Error(reconnect_error.to_string()))
+                            .await;
+
+                        break;
                     }
                 }
             }
@@ -433,19 +435,37 @@ async fn run_gemini_transport(
     }
 }
 
-async fn connect_gemini(
+// =============================================================
+// Reconnect
+// =============================================================
+
+async fn reconnect_gemini(
     api_key: &str,
-) -> Result<
-    (
-        GeminiWebSocket,
-        tokio_tungstenite::tungstenite::handshake::client::Response,
-    ),
-    GeminiError,
-> {
+
+    model: &str,
+
+    resume_handle: Option<&str>,
+) -> Result<GeminiWebSocket, GeminiError> {
     let url = build_websocket_url(api_key)?;
 
-    Ok(connect_async(url).await?)
+    println!("🔄 Connecting to Gemini again...");
+
+    let (mut websocket, _response) = connect_async(&url).await?;
+
+    let setup = build_setup(model, resume_handle);
+
+    websocket
+        .send(Message::Text(setup.to_string().into()))
+        .await?;
+
+    wait_for_setup_complete(&mut websocket).await?;
+
+    Ok(websocket)
 }
+
+// =============================================================
+// WebSocket loop
+// =============================================================
 
 async fn run_connection(
     websocket: &mut GeminiWebSocket,
@@ -479,27 +499,35 @@ async fn run_connection(
                 => {
                 let message =
                     match inbound {
-                        Some(Ok(message)) => {
+                        Some(
+                            Ok(message),
+                        ) => {
                             message
                         }
 
-                        Some(Err(error)) => {
+                        Some(
+                            Err(error),
+                        ) => {
                             return Err(
-                                GeminiError::WebSocket(
-                                    error,
-                                )
+                                GeminiError::
+                                    WebSocket(
+                                        error,
+                                    ),
                             );
                         }
 
                         None => {
                             return Err(
-                                GeminiError::ConnectionClosed,
+                                GeminiError::
+                                    ConnectionClosed,
                             );
                         }
                     };
 
                 match message {
-                    Message::Text(text) => {
+                    Message::Text(
+                        text,
+                    ) => {
                         capture_transport_control(
                             &text,
                             resume_handle,
@@ -512,7 +540,9 @@ async fn run_connection(
                         .await;
                     }
 
-                    Message::Binary(bytes) => {
+                    Message::Binary(
+                        bytes,
+                    ) => {
                         let text =
                             String::from_utf8_lossy(
                                 &bytes,
@@ -530,7 +560,9 @@ async fn run_connection(
                         .await;
                     }
 
-                    Message::Ping(payload) => {
+                    Message::Ping(
+                        payload,
+                    ) => {
                         websocket
                             .send(
                                 Message::Pong(
@@ -542,7 +574,9 @@ async fn run_connection(
 
                     Message::Pong(_) => {}
 
-                    Message::Close(frame) => {
+                    Message::Close(
+                        frame,
+                    ) => {
                         let reason =
                             frame
                                 .map(
@@ -578,19 +612,43 @@ async fn run_connection(
     }
 }
 
+// =============================================================
+// Transport control
+// =============================================================
+
 fn capture_transport_control(text: &str, resume_handle: &mut Option<String>) {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return;
     };
 
+    /*
+     * SessionResumptionUpdate is only sent when the
+     * setup contained sessionResumption.
+     *
+     * Keep the newest usable handle.
+     */
     if let Some(update) = value.get("sessionResumptionUpdate") {
-        if let Some(handle) = update.get("newHandle").and_then(Value::as_str) {
-            *resume_handle = Some(handle.to_string());
+        let resumable = update
+            .get("resumable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
-            println!("🔐 Gemini resumption handle updated.");
+        if resumable {
+            if let Some(handle) = update.get("newHandle").and_then(Value::as_str) {
+                *resume_handle = Some(handle.to_string());
+
+                println!("🔐 Gemini resumption handle updated.");
+            }
         }
     }
 
+    /*
+     * GoAway tells us the current WebSocket will soon end.
+     *
+     * We don't immediately tear down the connection here;
+     * run_connection will naturally observe the close and
+     * reconnect using the latest handle.
+     */
     if let Some(go_away) = value.get("goAway") {
         if let Some(time_left) = go_away.get("timeLeft").and_then(Value::as_str) {
             println!("⚠ Gemini GoAway received; time left: {time_left}");
@@ -605,6 +663,19 @@ fn capture_transport_control(text: &str, resume_handle: &mut Option<String>) {
 // =============================================================
 
 fn build_setup(model: &str, resume_handle: Option<&str>) -> Value {
+    /*
+     * Google documents:
+     *
+     *   sessionResumption: {}
+     *
+     * for a fresh resumable session, and:
+     *
+     *   sessionResumption: {
+     *       handle: "..."
+     *   }
+     *
+     * when resuming an existing session.
+     */
     let session_resumption = match resume_handle {
         Some(handle) => {
             json!({
@@ -613,16 +684,16 @@ fn build_setup(model: &str, resume_handle: Option<&str>) -> Value {
         }
 
         None => {
-            json!({
-                "transparent": true
-            })
+            json!({})
         }
     };
 
     json!({
         "setup": {
             "model":
-                format!("models/{model}"),
+                format!(
+                    "models/{model}"
+                ),
 
             "generationConfig": {
                 "responseModalities": [
@@ -631,29 +702,29 @@ fn build_setup(model: &str, resume_handle: Option<&str>) -> Value {
             },
 
             /*
-             * Allow long-running sessions to use context
-             * window compression instead of ending because
-             * the accumulated context becomes too large.
+             * IMPORTANT:
+             *
+             * This is a union field. It must specify the
+             * compression mechanism instead of being an empty
+             * object.
              */
-            "contextWindowCompression": {},
+            "contextWindowCompression": {
+                "slidingWindow": {}
+            },
 
             /*
-             * Manual VAD for deterministic client-side
-             * barge-in.
+             * Manual client-side VAD.
+             *
+             * Google documents activityStart/activityEnd as
+             * the required mechanism when automatic VAD is
+             * disabled.
              */
             "realtimeInputConfig": {
                 "automaticActivityDetection": {
                     "disabled": true
-                },
-
-                "activityHandling":
-                    "START_OF_ACTIVITY_INTERRUPTS"
+                }
             },
 
-            /*
-             * Session resumption lets us reconnect the
-             * WebSocket without losing the logical session.
-             */
             "sessionResumption":
                 session_resumption,
 
@@ -808,6 +879,10 @@ fn parse_server_message(text: &str) -> Result<Vec<VoiceEvent>, GeminiError> {
     }
 
     if let Some(server_content) = value.get("serverContent") {
+        /*
+         * Gemini sends interrupted=true when a client
+         * activity message cuts off model generation.
+         */
         if server_content.get("interrupted").and_then(Value::as_bool) == Some(true) {
             events.push(VoiceEvent::Interrupted);
         }
@@ -841,6 +916,9 @@ fn parse_server_message(text: &str) -> Result<Vec<VoiceEvent>, GeminiError> {
         }
     }
 
+    /*
+     * Function calling.
+     */
     if let Some(tool_call) = value.get("toolCall") {
         if let Some(function_calls) = tool_call.get("functionCalls").and_then(Value::as_array) {
             for function_call in function_calls {
@@ -961,6 +1039,38 @@ mod tests {
                 name: "read_last_dictation".to_string(),
                 arguments: "{}".to_string(),
             })]
+        );
+    }
+
+    #[test]
+    fn fresh_setup_has_valid_compression_and_resumption() {
+        let setup = build_setup("gemini-3.1-flash-live-preview", None);
+
+        let setup = setup.get("setup").unwrap();
+
+        assert!(
+            setup
+                .get("contextWindowCompression")
+                .and_then(|value| value.get("slidingWindow"))
+                .is_some()
+        );
+
+        assert_eq!(setup.get("sessionResumption").unwrap(), &json!({}));
+    }
+
+    #[test]
+    fn resumed_setup_contains_handle() {
+        let setup = build_setup("gemini-3.1-flash-live-preview", Some("resume-token"));
+
+        assert_eq!(
+            setup
+                .get("setup")
+                .unwrap()
+                .get("sessionResumption")
+                .unwrap(),
+            &json!({
+                "handle": "resume-token"
+            })
         );
     }
 }

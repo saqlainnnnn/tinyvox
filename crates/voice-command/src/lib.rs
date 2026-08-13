@@ -9,7 +9,7 @@ pub use ports::{AudioChunk, ToolCall, VoiceEvent, VoiceProvider, VoiceSession};
 
 pub mod agent;
 
-pub use agent::{VoiceAgent, VoiceAgentError};
+pub use agent::{VoiceAgent, VoiceAgentError, VoiceAgentState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceState {

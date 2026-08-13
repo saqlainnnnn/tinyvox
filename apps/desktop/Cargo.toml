@@ -11,3 +11,5 @@ tinyvox-engine = { version = "0.1.0", path = "../../crates/engine" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread"] }
 win = { version = "0.1.0", path = "../../crates/win" }
 cleanup = { version = "0.1.0", path = "../../crates/cleanup" }
+voice-command = { path = "../../crates/voice-command" }
+rustls = { version = "0.23", features = ["ring"] }
