@@ -147,6 +147,25 @@ impl VoiceProvider for GeminiLiveProvider {
                         ]
                     },
 
+                    /*
+                     * Manual VAD.
+                     *
+                     * The client decides when user activity
+                     * starts and ends.
+                     */
+                    "realtimeInputConfig": {
+                        "automaticActivityDetection": {
+                            "disabled": true
+                        },
+
+                        /*
+                         * When a new client activity begins,
+                         * interrupt the current model response.
+                         */
+                        "activityHandling":
+                            "START_OF_ACTIVITY_INTERRUPTS"
+                    },
+
                     "tools": [
                         {
                             "functionDeclarations": [
@@ -178,6 +197,7 @@ impl VoiceProvider for GeminiLiveProvider {
                                             "wrong": {
                                                 "type":
                                                     "STRING",
+
                                                 "description":
                                                     "The phrase TinyVox commonly mishears."
                                             },
@@ -185,6 +205,7 @@ impl VoiceProvider for GeminiLiveProvider {
                                             "correct": {
                                                 "type":
                                                     "STRING",
+
                                                 "description":
                                                     "The correct replacement text."
                                             }
@@ -219,7 +240,7 @@ impl VoiceProvider for GeminiLiveProvider {
             let (event_tx, event_rx) = mpsc::channel::<VoiceEvent>(128);
 
             // -------------------------------------------------
-            // WebSocket writer
+            // Writer
             // -------------------------------------------------
 
             tokio::spawn(async move {
@@ -233,7 +254,7 @@ impl VoiceProvider for GeminiLiveProvider {
             });
 
             // -------------------------------------------------
-            // WebSocket reader
+            // Reader
             // -------------------------------------------------
 
             let pong_tx = send_tx.clone();
@@ -364,10 +385,10 @@ impl GeminiSendHandle {
             .map_err(|_| GeminiError::ChannelClosed)
     }
 
-    pub async fn send_text(&self, text: &str) -> Result<(), GeminiError> {
+    pub async fn start_activity(&self) -> Result<(), GeminiError> {
         let message = json!({
             "realtimeInput": {
-                "text": text
+                "activityStart": {}
             }
         });
 
@@ -377,10 +398,23 @@ impl GeminiSendHandle {
             .map_err(|_| GeminiError::ChannelClosed)
     }
 
-    pub async fn end_audio(&self) -> Result<(), GeminiError> {
+    pub async fn end_activity(&self) -> Result<(), GeminiError> {
         let message = json!({
             "realtimeInput": {
-                "audioStreamEnd": true
+                "activityEnd": {}
+            }
+        });
+
+        self.send_tx
+            .send(Message::Text(message.to_string().into()))
+            .await
+            .map_err(|_| GeminiError::ChannelClosed)
+    }
+
+    pub async fn send_text(&self, text: &str) -> Result<(), GeminiError> {
+        let message = json!({
+            "realtimeInput": {
+                "text": text
             }
         });
 
@@ -565,6 +599,10 @@ fn parse_server_message(text: &str) -> Result<Vec<VoiceEvent>, GeminiError> {
     }
 
     if let Some(server_content) = value.get("serverContent") {
+        if server_content.get("interrupted").and_then(Value::as_bool) == Some(true) {
+            events.push(VoiceEvent::Interrupted);
+        }
+
         if server_content.get("turnComplete").and_then(Value::as_bool) == Some(true) {
             events.push(VoiceEvent::TurnComplete);
         }
@@ -643,6 +681,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(events, vec![VoiceEvent::TurnComplete]);
+    }
+
+    #[test]
+    fn parses_interrupted() {
+        let events = parse_server_message(
+            r#"{
+                    "serverContent": {
+                        "interrupted": true
+                    }
+                }"#,
+        )
+        .unwrap();
+
+        assert_eq!(events, vec![VoiceEvent::Interrupted]);
     }
 
     #[test]

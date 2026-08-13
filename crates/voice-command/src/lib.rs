@@ -7,6 +7,10 @@ pub use gemini::{
 
 pub use ports::{AudioChunk, ToolCall, VoiceEvent, VoiceProvider, VoiceSession};
 
+pub mod agent;
+
+pub use agent::{VoiceAgent, VoiceAgentError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceState {
     Disconnected,

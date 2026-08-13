@@ -17,6 +17,7 @@ pub enum VoiceEvent {
     AudioOut(AudioChunk),
     ToolCall(ToolCall),
     TurnComplete,
+    Interrupted,
     StateChanged(VoiceState),
     Error(String),
 }

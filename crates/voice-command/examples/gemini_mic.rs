@@ -64,7 +64,10 @@ async fn microphone_task(
     let start = std::time::Instant::now();
 
     let mut chunks_sent = 0usize;
+
     let mut bytes_sent = 0usize;
+
+    send_handle.start_activity().await?;
 
     while start.elapsed() < Duration::from_secs(10) {
         let chunk = microphone.read_chunk()?;
@@ -85,11 +88,11 @@ async fn microphone_task(
 
     microphone.stop();
 
-    send_handle.end_audio().await?;
+    send_handle.end_activity().await?;
 
     println!("✓ Microphone stream stopped.");
 
-    println!("→ Sent audioStreamEnd to Gemini.");
+    println!("→ Sent activityEnd to Gemini.");
 
     Ok((chunks_sent, bytes_sent))
 }
@@ -104,6 +107,7 @@ async fn speaker_task(
     println!("🔊 Speaker playback ready.");
 
     let mut audio_bytes = 0usize;
+
     let mut turns = 0usize;
 
     loop {
@@ -118,6 +122,14 @@ async fn speaker_task(
                 println!("← Gemini audio: {} bytes", chunk.samples.len());
 
                 playback.push_pcm16(&chunk.samples)?;
+            }
+
+            VoiceEvent::Interrupted => {
+                playback.stop();
+
+                playback.start()?;
+
+                println!("⚡ Gemini interrupted the current response.");
             }
 
             VoiceEvent::TurnComplete => {
@@ -138,10 +150,6 @@ async fn speaker_task(
         }
     }
 
-    /*
-     * Give CPAL time to drain queued audio
-     * before destroying the stream.
-     */
     sleep(Duration::from_secs(2)).await;
 
     playback.stop();
