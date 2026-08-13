@@ -1,9 +1,9 @@
 use std::io::{self, Write};
 
 use audio::CpalAudioRecorder;
+use stt_pulse::PulseClient;
 use tinyvox_engine::ports::{AudioRecorder, SpeechToText};
 use tokio::runtime::Runtime;
-use stt_pulse::PulseClient;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
@@ -29,8 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let audio = recorder.stop()?;
 
-    let duration =
-        audio.samples.len() as f32 / audio.sample_rate as f32;
+    let duration = audio.samples.len() as f32 / audio.sample_rate as f32;
 
     println!(
         "✓ Captured {} samples @ {} Hz ({:.2}s)",
@@ -45,9 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = Runtime::new()?;
 
-    let transcript = runtime.block_on(
-        pulse.transcribe(&audio)
-    )?;
+    let transcript = runtime.block_on(pulse.transcribe(&audio))?;
 
     println!("\nTranscript:");
     println!("-----------");

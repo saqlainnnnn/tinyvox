@@ -3,14 +3,9 @@ use std::env;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use tinyvox_engine::ports::{
-    CleanedText,
-    TextCleaner,
-    Transcript,
-};
+use tinyvox_engine::ports::{CleanedText, TextCleaner, Transcript};
 
-const ELECTRON_URL: &str =
-    "https://api.smallest.ai/waves/v1/chat/completions";
+const ELECTRON_URL: &str = "https://api.smallest.ai/waves/v1/chat/completions";
 
 #[derive(Debug)]
 pub enum ElectronError {
@@ -25,44 +20,26 @@ pub enum ElectronError {
 }
 
 impl std::fmt::Display for ElectronError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingApiKey => {
-                write!(
-                    f,
-                    "SMALLEST_API_KEY environment variable is missing"
-                )
+                write!(f, "SMALLEST_API_KEY environment variable is missing")
             }
 
             Self::Http(error) => {
-                write!(
-                    f,
-                    "Electron HTTP request failed: {error}"
-                )
+                write!(f, "Electron HTTP request failed: {error}")
             }
 
             Self::Api { status, body } => {
-                write!(
-                    f,
-                    "Electron API returned {status}: {body}"
-                )
+                write!(f, "Electron API returned {status}: {body}")
             }
 
             Self::InvalidResponse(error) => {
-                write!(
-                    f,
-                    "failed to decode Electron response: {error}"
-                )
+                write!(f, "failed to decode Electron response: {error}")
             }
 
             Self::EmptyResponse => {
-                write!(
-                    f,
-                    "Electron returned an empty response"
-                )
+                write!(f, "Electron returned an empty response")
             }
         }
     }
@@ -104,8 +81,7 @@ pub struct ElectronCleaner {
 
 impl ElectronCleaner {
     pub fn from_env() -> Result<Self, ElectronError> {
-        let api_key = env::var("SMALLEST_API_KEY")
-            .map_err(|_| ElectronError::MissingApiKey)?;
+        let api_key = env::var("SMALLEST_API_KEY").map_err(|_| ElectronError::MissingApiKey)?;
 
         Ok(Self {
             client: Client::new(),
@@ -149,15 +125,9 @@ impl ElectronCleaner {
         if !response.status().is_success() {
             let status = response.status();
 
-            let body = response
-                .text()
-                .await
-                .map_err(ElectronError::Http)?;
+            let body = response.text().await.map_err(ElectronError::Http)?;
 
-            return Err(ElectronError::Api {
-                status,
-                body,
-            });
+            return Err(ElectronError::Api { status, body });
         }
 
         let result = response
@@ -168,9 +138,7 @@ impl ElectronCleaner {
         let text = result
             .choices
             .first()
-            .and_then(|choice| {
-                choice.message.content.as_deref()
-            })
+            .and_then(|choice| choice.message.content.as_deref())
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .ok_or(ElectronError::EmptyResponse)?;
@@ -187,9 +155,7 @@ impl TextCleaner for ElectronCleaner {
     fn clean(
         &self,
         transcript: &Transcript,
-    ) -> impl std::future::Future<
-        Output = Result<CleanedText, Self::Error>,
-    > + Send {
+    ) -> impl std::future::Future<Output = Result<CleanedText, Self::Error>> + Send {
         self.clean_transcript(transcript)
     }
 }

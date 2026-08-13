@@ -7,17 +7,11 @@ use tinyvox_engine::ports::{AudioBuffer, AudioRecorder};
 
 pub mod stream;
 
-pub use stream::{
-    AudioStreamError,
-    CpalAudioStreamer,
-};
+pub use stream::{AudioStreamError, CpalAudioStreamer};
 
 pub mod playback;
 
-pub use playback::{
-    AudioPlaybackError,
-    CpalAudioPlayback,
-};
+pub use playback::{AudioPlaybackError, CpalAudioPlayback};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
@@ -37,9 +31,7 @@ impl CpalAudioRecorder {
             .default_input_device()
             .ok_or(AudioError::NoInputDevice)?;
 
-        let supported_config = device
-            .default_input_config()
-            .map_err(AudioError::Cpal)?;
+        let supported_config = device.default_input_config().map_err(AudioError::Cpal)?;
 
         let config: StreamConfig = supported_config.clone().into();
 
@@ -82,10 +74,7 @@ impl std::fmt::Display for AudioError {
             }
 
             Self::UnsupportedSampleFormat(format) => {
-                write!(
-                    f,
-                    "unsupported input sample format: {format:?}"
-                )
+                write!(f, "unsupported input sample format: {format:?}")
             }
 
             Self::BufferPoisoned => {
@@ -143,9 +132,8 @@ impl AudioRecorder for CpalAudioRecorder {
                     self.config,
                     move |data: &[i16], _| {
                         if let Ok(mut samples) = buffer.lock() {
-                            samples.extend(data.iter().map(|&sample| {
-                                sample as f32 / i16::MAX as f32
-                            }));
+                            samples
+                                .extend(data.iter().map(|&sample| sample as f32 / i16::MAX as f32));
                         }
                     },
                     error_callback,
@@ -160,9 +148,10 @@ impl AudioRecorder for CpalAudioRecorder {
                     self.config,
                     move |data: &[u16], _| {
                         if let Ok(mut samples) = buffer.lock() {
-                            samples.extend(data.iter().map(|&sample| {
-                                (sample as f32 / u16::MAX as f32) * 2.0 - 1.0
-                            }));
+                            samples.extend(
+                                data.iter()
+                                    .map(|&sample| (sample as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                            );
                         }
                     },
                     error_callback,
@@ -184,10 +173,7 @@ impl AudioRecorder for CpalAudioRecorder {
     }
 
     fn stop(&mut self) -> Result<AudioBuffer, Self::Error> {
-        let stream = self
-            .stream
-            .take()
-            .ok_or(AudioError::NotRecording)?;
+        let stream = self.stream.take().ok_or(AudioError::NotRecording)?;
 
         drop(stream);
 
@@ -197,16 +183,9 @@ impl AudioRecorder for CpalAudioRecorder {
             .map_err(|_| AudioError::BufferPoisoned)?
             .clone();
 
-        let mono = downmix_to_mono(
-            &samples,
-            self.channels(),
-        );
+        let mono = downmix_to_mono(&samples, self.channels());
 
-        let resampled = resample_linear(
-            &mono,
-            self.input_sample_rate(),
-            TARGET_SAMPLE_RATE,
-        );
+        let resampled = resample_linear(&mono, self.input_sample_rate(), TARGET_SAMPLE_RATE);
 
         Ok(AudioBuffer {
             samples: resampled,
@@ -215,64 +194,45 @@ impl AudioRecorder for CpalAudioRecorder {
     }
 }
 
-fn downmix_to_mono(
-    samples: &[f32],
-    channels: usize,
-) -> Vec<f32> {
+fn downmix_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
     if channels <= 1 {
         return samples.to_vec();
     }
 
     samples
         .chunks_exact(channels)
-        .map(|frame| {
-            frame.iter().copied().sum::<f32>()
-                / channels as f32
-        })
+        .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
         .collect()
 }
 
-fn resample_linear(
-    samples: &[f32],
-    input_rate: u32,
-    output_rate: u32,
-) -> Vec<f32> {
+fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
     if samples.is_empty() || input_rate == output_rate {
         return samples.to_vec();
     }
 
-    let ratio =
-        input_rate as f64 / output_rate as f64;
+    let ratio = input_rate as f64 / output_rate as f64;
 
-    let output_len =
-        (samples.len() as f64 / ratio).ceil() as usize;
+    let output_len = (samples.len() as f64 / ratio).ceil() as usize;
 
-    let mut output =
-        Vec::with_capacity(output_len);
+    let mut output = Vec::with_capacity(output_len);
 
     for output_index in 0..output_len {
-        let source_position =
-            output_index as f64 * ratio;
+        let source_position = output_index as f64 * ratio;
 
-        let left_index =
-            source_position.floor() as usize;
+        let left_index = source_position.floor() as usize;
 
         if left_index >= samples.len() {
             break;
         }
 
-        let right_index =
-            (left_index + 1).min(samples.len() - 1);
+        let right_index = (left_index + 1).min(samples.len() - 1);
 
-        let fraction =
-            (source_position - left_index as f64) as f32;
+        let fraction = (source_position - left_index as f64) as f32;
 
         let left = samples[left_index];
         let right = samples[right_index];
 
-        output.push(
-            left + (right - left) * fraction
-        );
+        output.push(left + (right - left) * fraction);
     }
 
     output

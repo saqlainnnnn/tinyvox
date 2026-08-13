@@ -3,14 +3,9 @@ use std::env;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use tinyvox_engine::ports::{
-    CleanedText,
-    TextCleaner,
-    Transcript,
-};
+use tinyvox_engine::ports::{CleanedText, TextCleaner, Transcript};
 
-const GROQ_URL: &str =
-    "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 
 const GROQ_MODEL: &str = "openai/gpt-oss-20b";
 
@@ -27,44 +22,26 @@ pub enum GroqError {
 }
 
 impl std::fmt::Display for GroqError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingApiKey => {
-                write!(
-                    f,
-                    "GROQ_API_KEY environment variable is missing"
-                )
+                write!(f, "GROQ_API_KEY environment variable is missing")
             }
 
             Self::Http(error) => {
-                write!(
-                    f,
-                    "Groq HTTP request failed: {error}"
-                )
+                write!(f, "Groq HTTP request failed: {error}")
             }
 
             Self::Api { status, body } => {
-                write!(
-                    f,
-                    "Groq API returned {status}: {body}"
-                )
+                write!(f, "Groq API returned {status}: {body}")
             }
 
             Self::InvalidResponse(error) => {
-                write!(
-                    f,
-                    "failed to decode Groq response: {error}"
-                )
+                write!(f, "failed to decode Groq response: {error}")
             }
 
             Self::EmptyResponse => {
-                write!(
-                    f,
-                    "Groq returned an empty response"
-                )
+                write!(f, "Groq returned an empty response")
             }
         }
     }
@@ -106,8 +83,7 @@ pub struct GroqCleaner {
 
 impl GroqCleaner {
     pub fn from_env() -> Result<Self, GroqError> {
-        let api_key = env::var("GROQ_API_KEY")
-            .map_err(|_| GroqError::MissingApiKey)?;
+        let api_key = env::var("GROQ_API_KEY").map_err(|_| GroqError::MissingApiKey)?;
 
         Ok(Self {
             client: Client::new(),
@@ -115,10 +91,7 @@ impl GroqCleaner {
         })
     }
 
-    async fn clean_transcript(
-        &self,
-        transcript: &Transcript,
-    ) -> Result<CleanedText, GroqError> {
+    async fn clean_transcript(&self, transcript: &Transcript) -> Result<CleanedText, GroqError> {
         let request = GroqChatRequest {
             model: GROQ_MODEL,
             messages: vec![
@@ -152,15 +125,9 @@ impl GroqCleaner {
         if !response.status().is_success() {
             let status = response.status();
 
-            let body = response
-                .text()
-                .await
-                .map_err(GroqError::Http)?;
+            let body = response.text().await.map_err(GroqError::Http)?;
 
-            return Err(GroqError::Api {
-                status,
-                body,
-            });
+            return Err(GroqError::Api { status, body });
         }
 
         let result = response
@@ -171,9 +138,7 @@ impl GroqCleaner {
         let text = result
             .choices
             .first()
-            .and_then(|choice| {
-                choice.message.content.as_deref()
-            })
+            .and_then(|choice| choice.message.content.as_deref())
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .ok_or(GroqError::EmptyResponse)?;
@@ -190,9 +155,7 @@ impl TextCleaner for GroqCleaner {
     fn clean(
         &self,
         transcript: &Transcript,
-    ) -> impl std::future::Future<
-        Output = Result<CleanedText, Self::Error>,
-    > + Send {
+    ) -> impl std::future::Future<Output = Result<CleanedText, Self::Error>> + Send {
         self.clean_transcript(transcript)
     }
 }

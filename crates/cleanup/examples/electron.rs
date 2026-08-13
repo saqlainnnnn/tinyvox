@@ -1,8 +1,5 @@
 use cleanup::ElectronCleaner;
-use tinyvox_engine::ports::{
-    TextCleaner,
-    Transcript,
-};
+use tinyvox_engine::ports::{TextCleaner, Transcript};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,7 +8,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cleaner = ElectronCleaner::from_env()?;
 
     let transcript = Transcript {
-        text: "uh hey can you like remind me tomorrow to call john and tell him ill be there at five".to_string(),
+        text:
+            "uh hey can you like remind me tomorrow to call john and tell him ill be there at five"
+                .to_string(),
     };
 
     println!("Original:");

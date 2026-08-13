@@ -7,8 +7,5 @@ pub trait TextInjector {
         Ok(())
     }
 
-    fn inject(
-        &self,
-        text: &CleanedText,
-    ) -> Result<(), Self::Error>;
+    fn inject(&self, text: &CleanedText) -> Result<(), Self::Error>;
 }

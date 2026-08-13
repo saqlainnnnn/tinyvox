@@ -1,40 +1,24 @@
 use std::thread;
 use std::time::Duration;
 
-use clipboard_win::{
-    get_clipboard_string,
-    set_clipboard_string,
-    ErrorCode,
-};
+use clipboard_win::{ErrorCode, get_clipboard_string, set_clipboard_string};
 
-use tinyvox_engine::ports::{
-    CleanedText,
-    TextInjector,
-};
+use tinyvox_engine::ports::{CleanedText, TextInjector};
 
 use windows::Win32::{
     Foundation::HWND,
     UI::{
         Input::KeyboardAndMouse::{
-            SendInput,
-            INPUT,
-            INPUT_0,
-            INPUT_KEYBOARD,
-            KEYBDINPUT,
-            KEYEVENTF_KEYUP,
-            VK_CONTROL,
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
             VK_V,
         },
-        WindowsAndMessaging::{
-            SetForegroundWindow,
-        },
+        WindowsAndMessaging::SetForegroundWindow,
     },
 };
 
 use crate::foreground::WindowsForeground;
 
-const CLIPBOARD_RESTORE_DELAY: Duration =
-    Duration::from_millis(50);
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub enum InjectionError {
@@ -45,36 +29,21 @@ pub enum InjectionError {
 }
 
 impl std::fmt::Display for InjectionError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ClipboardRead(error) => {
-                write!(
-                    f,
-                    "failed to read clipboard: {error}"
-                )
+                write!(f, "failed to read clipboard: {error}")
             }
 
             Self::ClipboardWrite(error) => {
-                write!(
-                    f,
-                    "failed to write clipboard: {error}"
-                )
+                write!(f, "failed to write clipboard: {error}")
             }
 
             Self::SendInputFailed => {
-                write!(
-                    f,
-                    "Windows SendInput failed"
-                )
+                write!(f, "Windows SendInput failed")
             }
             Self::ForegroundUnavailable => {
-                write!(
-                    f,
-                    "failed to capture foreground window"
-                )
+                write!(f, "failed to capture foreground window")
             }
         }
     }
@@ -82,21 +51,15 @@ impl std::fmt::Display for InjectionError {
 
 impl std::error::Error for InjectionError {}
 
-
 pub struct WindowsTextInjector {
     target: Option<HWND>,
 }
 
 impl WindowsTextInjector {
     pub fn new() -> Self {
-        Self{
-            target : None,
-        }
+        Self { target: None }
     }
-    pub fn set_target(
-        &mut self,
-        target: HWND,
-    ) {
+    pub fn set_target(&mut self, target: HWND) {
         self.target = Some(target);
     }
     pub fn clear_target(&mut self) {
@@ -145,17 +108,10 @@ impl WindowsTextInjector {
             },
         ];
 
-        let sent = unsafe {
-            SendInput(
-                &inputs,
-                std::mem::size_of::<INPUT>() as i32,
-            )
-        };
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
 
         if sent != inputs.len() as u32 {
-            return Err(
-                InjectionError::SendInputFailed
-            );
+            return Err(InjectionError::SendInputFailed);
         }
 
         Ok(())
@@ -171,33 +127,20 @@ impl Default for WindowsTextInjector {
 impl TextInjector for WindowsTextInjector {
     type Error = InjectionError;
 
-    fn inject(
-        &self,
-        text: &CleanedText,
-    ) -> Result<(), Self::Error> {
-
+    fn inject(&self, text: &CleanedText) -> Result<(), Self::Error> {
         if let Some(hwnd) = self.target {
             unsafe {
                 let _ = SetForegroundWindow(hwnd);
             }
         }
 
-        let previous_clipboard = get_clipboard_string()
-            .map_err(InjectionError::ClipboardRead)?;
+        let previous_clipboard = get_clipboard_string().map_err(InjectionError::ClipboardRead)?;
 
-        let previous_clipboard =
-            get_clipboard_string()
-                .map_err(
-                    InjectionError::ClipboardRead
-                )?;
+        let previous_clipboard = get_clipboard_string().map_err(InjectionError::ClipboardRead)?;
 
-        set_clipboard_string(&text.text)
-            .map_err(
-                InjectionError::ClipboardWrite
-            )?;
+        set_clipboard_string(&text.text).map_err(InjectionError::ClipboardWrite)?;
 
-        let injection_result =
-            Self::send_ctrl_v();
+        let injection_result = Self::send_ctrl_v();
 
         /*
          * SendInput queues the keyboard events.
@@ -205,17 +148,10 @@ impl TextInjector for WindowsTextInjector {
          * amount of time to process Ctrl+V before
          * restoring the clipboard.
          */
-        thread::sleep(
-            CLIPBOARD_RESTORE_DELAY
-        );
+        thread::sleep(CLIPBOARD_RESTORE_DELAY);
 
         let restore_result =
-            set_clipboard_string(
-                &previous_clipboard,
-            )
-            .map_err(
-                InjectionError::ClipboardWrite
-            );
+            set_clipboard_string(&previous_clipboard).map_err(InjectionError::ClipboardWrite);
 
         injection_result?;
         restore_result?;

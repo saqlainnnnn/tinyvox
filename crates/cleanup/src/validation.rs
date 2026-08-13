@@ -1,7 +1,4 @@
-use tinyvox_engine::ports::{
-    CleanedText,
-    Transcript,
-};
+use tinyvox_engine::ports::{CleanedText, Transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationError {
@@ -11,10 +8,7 @@ pub enum ValidationError {
 }
 
 impl std::fmt::Display for ValidationError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyOutput => {
                 write!(f, "cleaned text is empty")
@@ -48,9 +42,7 @@ pub fn validate_cleaned_text(
         return Err(ValidationError::OutputTooLong);
     }
 
-    if !original.is_empty()
-        && output.len() > original.len() * 3
-    {
+    if !original.is_empty() && output.len() > original.len() * 3 {
         return Err(ValidationError::ExcessiveExpansion);
     }
 
@@ -71,13 +63,7 @@ mod tests {
             text: "Hello, how are you?".to_string(),
         };
 
-        assert!(
-            validate_cleaned_text(
-                &transcript,
-                &cleaned
-            )
-            .is_ok()
-        );
+        assert!(validate_cleaned_text(&transcript, &cleaned).is_ok());
     }
 
     #[test]
@@ -91,10 +77,7 @@ mod tests {
         };
 
         assert_eq!(
-            validate_cleaned_text(
-                &transcript,
-                &cleaned
-            ),
+            validate_cleaned_text(&transcript, &cleaned),
             Err(ValidationError::EmptyOutput)
         );
     }
@@ -110,10 +93,7 @@ mod tests {
         };
 
         assert_eq!(
-            validate_cleaned_text(
-                &transcript,
-                &cleaned
-            ),
+            validate_cleaned_text(&transcript, &cleaned),
             Err(ValidationError::ExcessiveExpansion)
         );
     }
@@ -128,12 +108,6 @@ mod tests {
             text: "Hello!".to_string(),
         };
 
-        assert!(
-            validate_cleaned_text(
-                &transcript,
-                &cleaned
-            )
-            .is_ok()
-        );
+        assert!(validate_cleaned_text(&transcript, &cleaned).is_ok());
     }
 }

@@ -8,8 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("TinyVox — Text Injection");
     println!("========================\n");
 
-    let clipboard_text = get_clipboard_string()
-    .map_err(|e| format!("failed to read clipboard: {e:?}"))?;
+    let clipboard_text =
+        get_clipboard_string().map_err(|e| format!("failed to read clipboard: {e:?}"))?;
 
     if clipboard_text.is_empty() {
         println!("Clipboard is empty.");

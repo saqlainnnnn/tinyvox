@@ -1,72 +1,45 @@
 use std::path::PathBuf;
 
 use audio::CpalAudioRecorder;
-use cleanup::{
-    CleanupPipeline,
-    GroqCleaner,
-    LocalLlamaCleaner,
-};
+
+use cleanup::{CleanupPipeline, GroqCleaner, LocalLlamaCleaner};
+
 use stt_pulse::PulseClient;
+
 use tinyvox_engine::{
-    controller::TinyVoxController,
-    dictionary::{
-        shared as shared_dictionary,
-        Dictionary,
-    },
-    dictionary_store::DictionaryStore,
-    state::AppState,
-    stats::DayKey,
-    stats_store::StatsStore,
+    controller::TinyVoxController, dictionary::shared as shared_dictionary,
+    dictionary_store::DictionaryStore, last_dictation::shared as shared_last_dictation,
+    state::AppState, stats::DayKey, stats_store::StatsStore, tool_registry::ToolRegistry,
 };
+
 use win::{
-    HotkeyEvent,
-    OverlayState,
-    WindowsForeground,
-    WindowsHotkey,
-    WindowsOverlay,
+    HotkeyEvent, OverlayState, WindowsForeground, WindowsHotkey, WindowsOverlay,
     WindowsTextInjector,
 };
 
 fn current_day() -> Result<DayKey, Box<dyn std::error::Error>> {
-    let duration =
-        std::time::SystemTime::now()
-            .duration_since(
-                std::time::UNIX_EPOCH,
-            )?;
+    let duration = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
 
-    let days =
-        duration.as_secs() / 86_400;
+    let days = duration.as_secs() / 86_400;
 
     let mut year = 1970u16;
     let mut remaining_days = days;
 
     loop {
-        let leap =
-            year % 4 == 0
-                && (year % 100 != 0
-                    || year % 400 == 0);
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 
-        let days_in_year =
-            if leap {
-                366
-            } else {
-                365
-            };
+        let days_in_year = if leap { 366 } else { 365 };
 
         if remaining_days < days_in_year {
             break;
         }
 
-        remaining_days -=
-            days_in_year;
+        remaining_days -= days_in_year;
 
         year += 1;
     }
 
-    let leap =
-        year % 4 == 0
-            && (year % 100 != 0
-                || year % 400 == 0);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 
     let month_days = [
         31,
@@ -90,17 +63,12 @@ fn current_day() -> Result<DayKey, Box<dyn std::error::Error>> {
             break;
         }
 
-        remaining_days -=
-            days_in_month;
+        remaining_days -= days_in_month;
 
         month += 1;
     }
 
-    Ok(DayKey::new(
-        year,
-        month,
-        remaining_days as u8 + 1,
-    ))
+    Ok(DayKey::new(year, month, remaining_days as u8 + 1))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,90 +85,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------------------------------------------------
 
     let hotkey = WindowsHotkey::new()?;
+
     let foreground = WindowsForeground::new();
 
     // ---------------------------------------------------------
     // Audio / STT
     // ---------------------------------------------------------
 
-    let recorder =
-        CpalAudioRecorder::new()?;
+    let recorder = CpalAudioRecorder::new()?;
 
-    let speech_to_text =
-        PulseClient::from_env()?;
+    let speech_to_text = PulseClient::from_env()?;
 
     // ---------------------------------------------------------
     // Cleanup
     // ---------------------------------------------------------
 
-    let primary =
-        GroqCleaner::from_env()?;
+    let primary = GroqCleaner::from_env()?;
 
-    let fallback =
-        LocalLlamaCleaner::new();
+    let fallback = LocalLlamaCleaner::new();
 
-    let cleaner =
-        CleanupPipeline::new(
-            primary,
-            fallback,
-        );
+    let cleaner = CleanupPipeline::new(primary, fallback);
 
     // ---------------------------------------------------------
     // Injection / overlay
     // ---------------------------------------------------------
 
-    let injector =
-        WindowsTextInjector::new();
+    let injector = WindowsTextInjector::new();
 
-    let overlay =
-        WindowsOverlay::new()?;
+    let overlay = WindowsOverlay::new()?;
 
     // ---------------------------------------------------------
     // Application data directory
     // ---------------------------------------------------------
 
-    let app_data =
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .ok_or(
-                "APPDATA environment variable is not available",
-            )?
-            .join("TinyVox");
+    let app_data = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or("APPDATA environment variable is not available")?
+        .join("TinyVox");
 
     // ---------------------------------------------------------
     // Dictionary
     // ---------------------------------------------------------
 
-    let dictionary_path =
-        app_data.join("dictionary.json");
+    let dictionary_path = app_data.join("dictionary.json");
 
-    let dictionary_store =
-        DictionaryStore::new(
-            dictionary_path,
-        );
+    let dictionary_store = DictionaryStore::new(dictionary_path);
 
-    let dictionary =
-        dictionary_store.load()?;
+    let dictionary = dictionary_store.load()?;
 
-    let shared_dictionary =
-        shared_dictionary();
+    let shared_dictionary = shared_dictionary();
 
-    *shared_dictionary
-        .write()
-        .unwrap() = dictionary;
+    {
+        let mut target = shared_dictionary.write().unwrap();
+
+        *target = dictionary;
+    }
+
+    // ---------------------------------------------------------
+    // Last dictation
+    // ---------------------------------------------------------
+
+    let shared_last_dictation = shared_last_dictation();
 
     // ---------------------------------------------------------
     // Stats
     // ---------------------------------------------------------
 
-    let stats_path =
-        app_data.join("stats.json");
+    let stats_path = app_data.join("stats.json");
 
-    let stats_store =
-        StatsStore::new(stats_path);
+    let stats_store = StatsStore::new(stats_path);
 
-    let stats =
-        stats_store.load()?;
+    let stats = stats_store.load()?;
 
     println!(
         "📊 Loaded stats: {} words, {} dictations.",
@@ -212,18 +167,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Controller
     // ---------------------------------------------------------
 
-    let mut controller =
-        TinyVoxController::new(
-            recorder,
-            speech_to_text,
-            shared_dictionary,
-            cleaner,
-            injector,
-            stats,
-        );
+    let mut controller = TinyVoxController::new_with_last_dictation(
+        recorder,
+        speech_to_text,
+        shared_dictionary.clone(),
+        cleaner,
+        injector,
+        stats,
+        shared_last_dictation.clone(),
+    );
 
-    let runtime =
-        tokio::runtime::Runtime::new()?;
+    // ---------------------------------------------------------
+    // Voice tool registry
+    //
+    // We construct this now so it operates on the exact same
+    // dictionary and last-dictation state as the controller.
+    //
+    // The actual Gemini VoiceAgent wiring comes next.
+    // ---------------------------------------------------------
+
+    let mut _tool_registry =
+        ToolRegistry::new(shared_dictionary.clone(), shared_last_dictation.clone());
+
+    // ---------------------------------------------------------
+    // Runtime
+    // ---------------------------------------------------------
+
+    let runtime = tokio::runtime::Runtime::new()?;
 
     let mut target = None;
 
@@ -236,17 +206,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             HotkeyEvent::Pressed => {
                 // Prevent starting another recording while
                 // TinyVox is processing the previous one.
-                if controller
-                    .state()
-                    .is_busy()
-                {
-                    println!(
-                        "⚠ TinyVox is busy."
-                    );
+                if controller.state().is_busy() {
+                    println!("⚠ TinyVox is busy.");
 
-                    overlay.set_state(
-                        OverlayState::Busy,
-                    );
+                    overlay.set_state(OverlayState::Busy);
 
                     overlay.show();
 
@@ -255,118 +218,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Capture the foreground application
                 // before recording begins.
-                let window =
-                    foreground.get()?;
+                let window = foreground.get()?;
 
-                println!(
-                    "🎯 Target: {}",
-                    window.process_name
-                );
+                println!("🎯 Target: {}", window.process_name);
 
                 target = Some(window);
 
-                overlay.set_state(
-                    OverlayState::Recording,
-                );
+                overlay.set_state(OverlayState::Recording);
 
                 overlay.show();
 
-                controller
-                    .start_recording()?;
+                controller.start_recording()?;
 
-                println!(
-                    "🎙️ Recording..."
-                );
+                println!("🎙️ Recording...");
             }
 
             HotkeyEvent::Released => {
-                println!(
-                    "🧠 Transcribing..."
-                );
+                println!("🧠 Transcribing...");
 
-                let day =
-                    current_day()?;
+                let day = current_day()?;
 
-                runtime.block_on(
-                    controller.stop_recording(
-                        day,
-                        |state| {
-                            match state {
-                                AppState::Transcribing => {
-                                    overlay.set_state(
-                                        OverlayState::Transcribing,
-                                    );
-                                }
+                runtime.block_on(controller.stop_recording(day, |state| match state {
+                    AppState::Transcribing => {
+                        overlay.set_state(OverlayState::Transcribing);
+                    }
 
-                                AppState::Cleaning => {
-                                    overlay.set_state(
-                                        OverlayState::Cleaning,
-                                    );
-                                }
+                    AppState::Cleaning => {
+                        overlay.set_state(OverlayState::Cleaning);
+                    }
 
-                                AppState::Injecting => {
-                                    overlay.set_state(
-                                        OverlayState::Injecting,
-                                    );
-                                }
+                    AppState::Injecting => {
+                        overlay.set_state(OverlayState::Injecting);
+                    }
 
-                                AppState::Idle => {
-                                    overlay.hide();
-                                }
+                    AppState::Idle => {
+                        overlay.hide();
+                    }
 
-                                _ => {}
-                            }
-                        },
-                    ),
-                )?;
+                    _ => {}
+                }))?;
 
                 // -------------------------------------------------
                 // Persist stats after successful dictation.
-                //
-                // A stats failure must NOT break injection,
-                // so saving errors are only logged.
                 // -------------------------------------------------
 
-                if let Err(error) =
-                    stats_store.save(
-                        controller.stats(),
-                    )
-                {
-                    eprintln!(
-                        "⚠ Failed to save stats: {error}"
-                    );
+                if let Err(error) = stats_store.save(controller.stats()) {
+                    eprintln!("⚠ Failed to save stats: {error}");
+                }
+
+                // -------------------------------------------------
+                // Persist dictionary.
+                //
+                // Dictionary hit counts may have changed during
+                // this dictation, so save the shared dictionary.
+                // -------------------------------------------------
+
+                if let Ok(dictionary) = shared_dictionary.read() {
+                    if let Err(error) = dictionary_store.save(&dictionary) {
+                        eprintln!("⚠ Failed to save dictionary: {error}");
+                    }
                 }
 
                 // -------------------------------------------------
                 // Report result
                 // -------------------------------------------------
 
-                if let Some(window) =
-                    target.take()
-                {
-                    println!(
-                        "✓ Injected into {}.",
-                        window.process_name
-                    );
+                if let Some(window) = target.take() {
+                    println!("✓ Injected into {}.", window.process_name);
                 } else {
-                    println!(
-                        "✓ Injected."
-                    );
+                    println!("✓ Injected.");
                 }
 
                 println!(
                     "📊 Today: {} words | {} dictations | {} day streak",
-                    controller
-                        .stats()
-                        .today(day)
-                        .words,
-                    controller
-                        .stats()
-                        .today(day)
-                        .dictations,
-                    controller
-                        .stats()
-                        .current_streak(day),
+                    controller.stats().today(day).words,
+                    controller.stats().today(day).dictations,
+                    controller.stats().current_streak(day),
                 );
             }
         }

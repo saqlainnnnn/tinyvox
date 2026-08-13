@@ -27,9 +27,7 @@ pub trait VoiceProvider {
 
     fn connect(
         &self,
-    ) -> impl std::future::Future<
-        Output = Result<Self::Session, Self::Error>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<Self::Session, Self::Error>> + Send;
 }
 
 pub trait VoiceSession {
@@ -38,19 +36,11 @@ pub trait VoiceSession {
     fn send_audio(
         &mut self,
         chunk: AudioChunk,
-    ) -> impl std::future::Future<
-        Output = Result<(), Self::Error>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     fn poll_event(
         &mut self,
-    ) -> impl std::future::Future<
-        Output = Result<VoiceEvent, Self::Error>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<VoiceEvent, Self::Error>> + Send;
 
-    fn interrupt(
-        &mut self,
-    ) -> impl std::future::Future<
-        Output = Result<(), Self::Error>,
-    > + Send;
+    fn interrupt(&mut self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }

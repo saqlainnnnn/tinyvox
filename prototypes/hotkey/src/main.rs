@@ -1,14 +1,14 @@
 use std::sync::{
+    OnceLock,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Sender},
-    OnceLock,
 };
 use std::thread;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
 };
 
 const VK_F9: u32 = 0x78;
@@ -72,11 +72,7 @@ fn main() {
     let _ = hook_thread.join();
 }
 
-unsafe extern "system" fn keyboard_hook(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let keyboard = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
 

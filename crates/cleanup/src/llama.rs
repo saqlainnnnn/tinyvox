@@ -1,14 +1,9 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use tinyvox_engine::ports::{
-    CleanedText,
-    TextCleaner,
-    Transcript,
-};
+use tinyvox_engine::ports::{CleanedText, TextCleaner, Transcript};
 
-const DEFAULT_LLAMA_URL: &str =
-    "http://127.0.0.1:8080/v1/chat/completions";
+const DEFAULT_LLAMA_URL: &str = "http://127.0.0.1:8080/v1/chat/completions";
 
 const DEFAULT_LLAMA_MODEL: &str = "local-cleaner";
 
@@ -24,37 +19,22 @@ pub enum LocalLlamaError {
 }
 
 impl std::fmt::Display for LocalLlamaError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http(error) => {
-                write!(
-                    f,
-                    "local llama.cpp request failed: {error}"
-                )
+                write!(f, "local llama.cpp request failed: {error}")
             }
 
             Self::Api { status, body } => {
-                write!(
-                    f,
-                    "local llama.cpp returned {status}: {body}"
-                )
+                write!(f, "local llama.cpp returned {status}: {body}")
             }
 
             Self::InvalidResponse(error) => {
-                write!(
-                    f,
-                    "failed to decode llama.cpp response: {error}"
-                )
+                write!(f, "failed to decode llama.cpp response: {error}")
             }
 
             Self::EmptyResponse => {
-                write!(
-                    f,
-                    "local llama.cpp returned an empty response"
-                )
+                write!(f, "local llama.cpp returned an empty response")
             }
         }
     }
@@ -104,18 +84,12 @@ impl LocalLlamaCleaner {
         }
     }
 
-    pub fn with_url(
-        mut self,
-        url: impl Into<String>,
-    ) -> Self {
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
         self
     }
 
-    pub fn with_model(
-        mut self,
-        model: impl Into<String>,
-    ) -> Self {
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
     }
@@ -156,15 +130,9 @@ impl LocalLlamaCleaner {
         if !response.status().is_success() {
             let status = response.status();
 
-            let body = response
-                .text()
-                .await
-                .map_err(LocalLlamaError::Http)?;
+            let body = response.text().await.map_err(LocalLlamaError::Http)?;
 
-            return Err(LocalLlamaError::Api {
-                status,
-                body,
-            });
+            return Err(LocalLlamaError::Api { status, body });
         }
 
         let result = response
@@ -175,9 +143,7 @@ impl LocalLlamaCleaner {
         let text = result
             .choices
             .first()
-            .and_then(|choice| {
-                choice.message.content.as_deref()
-            })
+            .and_then(|choice| choice.message.content.as_deref())
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .ok_or(LocalLlamaError::EmptyResponse)?;
@@ -200,9 +166,7 @@ impl TextCleaner for LocalLlamaCleaner {
     fn clean(
         &self,
         transcript: &Transcript,
-    ) -> impl std::future::Future<
-        Output = Result<CleanedText, Self::Error>,
-    > + Send {
+    ) -> impl std::future::Future<Output = Result<CleanedText, Self::Error>> + Send {
         self.clean_transcript(transcript)
     }
 }

@@ -7,5 +7,5 @@ pub mod ports;
 pub mod state;
 pub mod stats;
 pub mod stats_store;
-pub mod tools;
 pub mod tool_registry;
+pub mod tools;

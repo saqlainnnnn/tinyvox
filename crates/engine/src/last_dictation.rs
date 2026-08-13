@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    RwLock,
-};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LastDictation {
@@ -9,22 +6,15 @@ pub struct LastDictation {
 }
 
 impl LastDictation {
-    pub fn new(
-        text: impl Into<String>,
-    ) -> Self {
-        Self {
-            text: text.into(),
-        }
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
     }
 
     pub fn text(&self) -> &str {
         &self.text
     }
 
-    pub fn replace(
-        &mut self,
-        text: impl Into<String>,
-    ) {
+    pub fn replace(&mut self, text: impl Into<String>) {
         self.text = text.into();
     }
 
@@ -39,15 +29,10 @@ impl Default for LastDictation {
     }
 }
 
-pub type SharedLastDictation =
-    Arc<RwLock<LastDictation>>;
+pub type SharedLastDictation = Arc<RwLock<LastDictation>>;
 
 pub fn shared() -> SharedLastDictation {
-    Arc::new(
-        RwLock::new(
-            LastDictation::default()
-        )
-    )
+    Arc::new(RwLock::new(LastDictation::default()))
 }
 
 #[cfg(test)]
@@ -56,69 +41,41 @@ mod tests {
 
     #[test]
     fn creates_last_dictation() {
-        let dictation =
-            LastDictation::new(
-                "hello from TinyVox",
-            );
+        let dictation = LastDictation::new("hello from TinyVox");
 
-        assert_eq!(
-            dictation.text(),
-            "hello from TinyVox"
-        );
+        assert_eq!(dictation.text(), "hello from TinyVox");
     }
 
     #[test]
     fn replaces_last_dictation() {
-        let mut dictation =
-            LastDictation::new(
-                "first dictation",
-            );
+        let mut dictation = LastDictation::new("first dictation");
 
-        dictation.replace(
-            "second dictation",
-        );
+        dictation.replace("second dictation");
 
-        assert_eq!(
-            dictation.text(),
-            "second dictation"
-        );
+        assert_eq!(dictation.text(), "second dictation");
     }
 
     #[test]
     fn default_is_empty() {
-        let dictation =
-            LastDictation::default();
+        let dictation = LastDictation::default();
 
-        assert!(
-            dictation.is_empty()
-        );
+        assert!(dictation.is_empty());
 
-        assert_eq!(
-            dictation.text(),
-            ""
-        );
+        assert_eq!(dictation.text(), "");
     }
 
     #[test]
     fn shared_last_dictation_can_be_updated() {
-        let shared =
-            shared();
+        let shared = shared();
 
         {
-            let mut dictation =
-                shared.write().unwrap();
+            let mut dictation = shared.write().unwrap();
 
-            dictation.replace(
-                "hello TinyVox",
-            );
+            dictation.replace("hello TinyVox");
         }
 
-        let dictation =
-            shared.read().unwrap();
+        let dictation = shared.read().unwrap();
 
-        assert_eq!(
-            dictation.text(),
-            "hello TinyVox"
-        );
+        assert_eq!(dictation.text(), "hello TinyVox");
     }
 }

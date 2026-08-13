@@ -4,66 +4,22 @@ use std::{
 };
 
 use windows::{
-    core::w,
     Win32::{
-        Foundation::{
-            HWND,
-            LPARAM,
-            LRESULT,
-            RECT,
-            WPARAM,
-        },
+        Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{
-            BeginPaint,
-            CreateRoundRectRgn,
-            DeleteObject,
-            DrawTextW,
-            EndPaint,
-            FillRgn,
-            GetStockObject,
-            SetBkMode,
-            SetTextColor,
-            BLACK_BRUSH,
-            HBRUSH,
-            PAINTSTRUCT,
-            TRANSPARENT,
+            BLACK_BRUSH, BeginPaint, CreateRoundRectRgn, DeleteObject, DrawTextW, EndPaint,
+            FillRgn, GetStockObject, HBRUSH, PAINTSTRUCT, SetBkMode, SetTextColor, TRANSPARENT,
         },
         UI::WindowsAndMessaging::{
-            CreateWindowExW,
-            DefWindowProcW,
-            DestroyWindow,
-            DispatchMessageW,
-            GetSystemMetrics,
-            PeekMessageW,
-            RegisterClassW,
-            SetLayeredWindowAttributes,
-            SetWindowLongPtrW,
-            SetWindowPos,
-            ShowWindow,
-            TranslateMessage,
-            CS_HREDRAW,
-            CS_VREDRAW,
-            HWND_TOPMOST,
-            MSG,
-            PM_REMOVE,
-            SWP_NOACTIVATE,
-            SWP_NOSIZE,
-            SW_HIDE,
-            SW_SHOWNOACTIVATE,
-            WM_APP,
-            WM_DESTROY,
-            WM_NCCREATE,
-            WM_PAINT,
-            WM_QUIT,
-            WNDCLASSW,
-            WS_EX_LAYERED,
-            WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW,
-            WS_EX_TRANSPARENT,
-            WS_POPUP,
-            LWA_ALPHA,
+            CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+            DispatchMessageW, GetSystemMetrics, HWND_TOPMOST, LWA_ALPHA, MSG, PM_REMOVE,
+            PeekMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE,
+            SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            TranslateMessage, WM_APP, WM_DESTROY, WM_NCCREATE, WM_PAINT, WM_QUIT, WNDCLASSW,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
         },
     },
+    core::w,
 };
 
 const WM_OVERLAY_SHOW: u32 = WM_APP + 10;
@@ -125,30 +81,18 @@ pub enum OverlayError {
 }
 
 impl std::fmt::Display for OverlayError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::WindowCreationFailed => {
-                write!(
-                    f,
-                    "failed to create overlay window"
-                )
+                write!(f, "failed to create overlay window")
             }
 
             Self::WindowClassRegistrationFailed => {
-                write!(
-                    f,
-                    "failed to register overlay window class"
-                )
+                write!(f, "failed to register overlay window class")
             }
 
             Self::ThreadStartup => {
-                write!(
-                    f,
-                    "overlay thread failed to start"
-                )
+                write!(f, "overlay thread failed to start")
             }
         }
     }
@@ -174,17 +118,12 @@ pub struct WindowsOverlay {
 
 impl WindowsOverlay {
     pub fn new() -> Result<Self, OverlayError> {
-        let (startup_tx, startup_rx) =
-            mpsc::channel();
+        let (startup_tx, startup_rx) = mpsc::channel();
 
-        let (command_tx, command_rx) =
-            mpsc::channel();
+        let (command_tx, command_rx) = mpsc::channel();
 
         let thread = thread::spawn(move || {
-            overlay_thread(
-                startup_tx,
-                command_rx,
-            );
+            overlay_thread(startup_tx, command_rx);
         });
 
         startup_rx
@@ -198,32 +137,21 @@ impl WindowsOverlay {
     }
 
     pub fn show(&self) {
-        let _ = self.sender.send(
-            OverlayCommand::Show,
-        );
+        let _ = self.sender.send(OverlayCommand::Show);
     }
 
     pub fn hide(&self) {
-        let _ = self.sender.send(
-            OverlayCommand::Hide,
-        );
+        let _ = self.sender.send(OverlayCommand::Hide);
     }
 
-    pub fn set_state(
-        &self,
-        state: OverlayState,
-    ) {
-        let _ = self.sender.send(
-            OverlayCommand::SetState(state),
-        );
+    pub fn set_state(&self, state: OverlayState) {
+        let _ = self.sender.send(OverlayCommand::SetState(state));
     }
 }
 
 impl Drop for WindowsOverlay {
     fn drop(&mut self) {
-        let _ = self.sender.send(
-            OverlayCommand::Shutdown,
-        );
+        let _ = self.sender.send(OverlayCommand::Shutdown);
 
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -237,41 +165,22 @@ fn overlay_thread(
 ) {
     let class_name = w!("TinyVoxOverlay");
 
-    let h_instance = unsafe {
-        windows::Win32::System::LibraryLoader::GetModuleHandleW(
-            None,
-        )
-    }
-    .unwrap_or_default();
+    let h_instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+        .unwrap_or_default();
 
     let class = WNDCLASSW {
-        lpfnWndProc: Some(
-            overlay_window_proc,
-        ),
+        lpfnWndProc: Some(overlay_window_proc),
         hInstance: h_instance.into(),
         lpszClassName: class_name,
         style: CS_HREDRAW | CS_VREDRAW,
-        hbrBackground: unsafe {
-            HBRUSH(
-                GetStockObject(
-                    BLACK_BRUSH,
-                )
-                .0,
-            )
-        },
+        hbrBackground: unsafe { HBRUSH(GetStockObject(BLACK_BRUSH).0) },
         ..Default::default()
     };
 
-    let registered = unsafe {
-        RegisterClassW(&class)
-    };
+    let registered = unsafe { RegisterClassW(&class) };
 
     if registered == 0 {
-        let _ = startup_tx.send(
-            Err(
-                OverlayError::WindowClassRegistrationFailed,
-            ),
-        );
+        let _ = startup_tx.send(Err(OverlayError::WindowClassRegistrationFailed));
 
         return;
     }
@@ -284,10 +193,7 @@ fn overlay_thread(
 
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED
-                | WS_EX_NOACTIVATE
-                | WS_EX_TOOLWINDOW
-                | WS_EX_TRANSPARENT,
+            WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
             class_name,
             w!("TinyVox"),
             WS_POPUP,
@@ -310,11 +216,7 @@ fn overlay_thread(
                 drop(Box::from_raw(data_ptr));
             }
 
-            let _ = startup_tx.send(
-                Err(
-                    OverlayError::WindowCreationFailed,
-                ),
-            );
+            let _ = startup_tx.send(Err(OverlayError::WindowCreationFailed));
 
             return;
         }
@@ -336,51 +238,36 @@ fn overlay_thread(
     let mut message = MSG::default();
 
     loop {
-        while let Ok(command) =
-            command_rx.try_recv()
-        {
+        while let Ok(command) = command_rx.try_recv() {
             match command {
                 OverlayCommand::Show => {
                     position_overlay(hwnd);
 
                     unsafe {
-                        ShowWindow(
-                            hwnd,
-                            SW_SHOWNOACTIVATE,
-                        );
+                        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                     }
                 }
 
-                OverlayCommand::Hide => {
-                    unsafe {
-                        ShowWindow(
-                            hwnd,
-                            SW_HIDE,
-                        );
+                OverlayCommand::Hide => unsafe {
+                    ShowWindow(hwnd, SW_HIDE);
+                },
+
+                OverlayCommand::SetState(state) => unsafe {
+                    let ptr = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+                        hwnd,
+                        windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                    );
+
+                    if ptr != 0 {
+                        let data = &mut *(ptr as *mut OverlayData);
+
+                        data.state = state;
                     }
-                }
-
-                OverlayCommand::SetState(state) => {
-                    unsafe {
-                        let ptr =
-                            windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
-                                hwnd,
-                                windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
-                            );
-
-                        if ptr != 0 {
-                            let data =
-                                &mut *(ptr as *mut OverlayData);
-
-                            data.state = state;
-                        }
-                    }
-                }
+                },
 
                 OverlayCommand::Shutdown => {
                     unsafe {
-                        let _ =
-                            DestroyWindow(hwnd);
+                        let _ = DestroyWindow(hwnd);
                     }
 
                     return;
@@ -388,17 +275,7 @@ fn overlay_thread(
             }
         }
 
-        while unsafe {
-            PeekMessageW(
-                &mut message,
-                None,
-                0,
-                0,
-                PM_REMOVE,
-            )
-        }
-        .as_bool()
-        {
+        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
             if message.message == WM_QUIT {
                 return;
             }
@@ -409,21 +286,15 @@ fn overlay_thread(
             }
         }
 
-        thread::sleep(
-            std::time::Duration::from_millis(10),
-        );
+        thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
 fn position_overlay(hwnd: HWND) {
-    let screen_width = unsafe {
-        GetSystemMetrics(
-            windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
-        )
-    };
+    let screen_width =
+        unsafe { GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN) };
 
-    let x =
-        (screen_width - OVERLAY_WIDTH) / 2;
+    let x = (screen_width - OVERLAY_WIDTH) / 2;
 
     let y = 32;
 
@@ -449,12 +320,10 @@ unsafe extern "system" fn overlay_window_proc(
     match message {
         WM_NCCREATE => {
             let create_struct = unsafe {
-                &*(lparam.0
-                    as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW)
+                &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW)
             };
 
-            let data =
-                create_struct.lpCreateParams;
+            let data = create_struct.lpCreateParams;
 
             unsafe {
                 SetWindowLongPtrW(
@@ -491,38 +360,21 @@ unsafe extern "system" fn overlay_window_proc(
                         0,
                     );
 
-                    drop(
-                        Box::from_raw(
-                            ptr as *mut OverlayData,
-                        ),
-                    );
+                    drop(Box::from_raw(ptr as *mut OverlayData));
                 }
             }
 
             LRESULT(0)
         }
 
-        _ => unsafe {
-            DefWindowProcW(
-                hwnd,
-                message,
-                wparam,
-                lparam,
-            )
-        },
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
 }
 
 unsafe fn paint_overlay(hwnd: HWND) {
-    let mut paint =
-        PAINTSTRUCT::default();
+    let mut paint = PAINTSTRUCT::default();
 
-    let hdc = unsafe {
-        BeginPaint(
-            hwnd,
-            &mut paint,
-        )
-    };
+    let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
 
     let ptr = unsafe {
         windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
@@ -533,18 +385,13 @@ unsafe fn paint_overlay(hwnd: HWND) {
 
     if ptr == 0 {
         unsafe {
-            EndPaint(
-                hwnd,
-                &paint,
-            );
+            EndPaint(hwnd, &paint);
         }
 
         return;
     }
 
-    let data = unsafe {
-        &*(ptr as *const OverlayData)
-    };
+    let data = unsafe { &*(ptr as *const OverlayData) };
 
     let region = unsafe {
         CreateRoundRectRgn(
@@ -558,27 +405,18 @@ unsafe fn paint_overlay(hwnd: HWND) {
     };
 
     let brush = unsafe {
-        windows::Win32::Graphics::Gdi::CreateSolidBrush(
-            windows::Win32::Foundation::COLORREF(
-                0x001E1E1E,
-            ),
-        )
+        windows::Win32::Graphics::Gdi::CreateSolidBrush(windows::Win32::Foundation::COLORREF(
+            0x001E1E1E,
+        ))
     };
 
     unsafe {
-        FillRgn(
-            hdc,
-            region,
-            brush,
-        );
+        FillRgn(hdc, region, brush);
     }
 
     let text = data.state.text();
 
-    let mut wide: Vec<u16> = text
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
 
     let mut rect = RECT {
         left: 0,
@@ -588,17 +426,9 @@ unsafe fn paint_overlay(hwnd: HWND) {
     };
 
     unsafe {
-        SetBkMode(
-            hdc,
-            TRANSPARENT,
-        );
+        SetBkMode(hdc, TRANSPARENT);
 
-        SetTextColor(
-            hdc,
-            windows::Win32::Foundation::COLORREF(
-                0x00FFFFFF,
-            ),
-        );
+        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
 
         DrawTextW(
             hdc,
@@ -609,15 +439,10 @@ unsafe fn paint_overlay(hwnd: HWND) {
                 | windows::Win32::Graphics::Gdi::DT_SINGLELINE,
         );
 
-        let _ =
-            DeleteObject(region.into());
+        let _ = DeleteObject(region.into());
 
-        let _ =
-            DeleteObject(brush.into());
+        let _ = DeleteObject(brush.into());
 
-        EndPaint(
-            hwnd,
-            &paint,
-        );
+        EndPaint(hwnd, &paint);
     }
 }

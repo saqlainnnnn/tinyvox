@@ -2,16 +2,9 @@ use windows::Win32::{
     Foundation::HWND,
     System::{
         ProcessStatus::GetModuleFileNameExW,
-        Threading::{
-            OpenProcess,
-            PROCESS_QUERY_INFORMATION,
-            PROCESS_VM_READ,
-        },
+        Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
     },
-    UI::WindowsAndMessaging::{
-        GetForegroundWindow,
-        GetWindowThreadProcessId,
-    },
+    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
 };
 
 #[derive(Debug, Clone)]
@@ -29,10 +22,7 @@ pub enum ForegroundError {
 }
 
 impl std::fmt::Display for ForegroundError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoForegroundWindow => {
                 write!(f, "no foreground window found")
@@ -47,10 +37,7 @@ impl std::fmt::Display for ForegroundError {
             }
 
             Self::ProcessNameUnavailable => {
-                write!(
-                    f,
-                    "failed to get foreground process name"
-                )
+                write!(f, "failed to get foreground process name")
             }
         }
     }
@@ -65,66 +52,41 @@ impl WindowsForeground {
         Self
     }
 
-    pub fn get(
-        &self,
-    ) -> Result<ForegroundWindow, ForegroundError> {
-        let hwnd = unsafe {
-            GetForegroundWindow()
-        };
+    pub fn get(&self) -> Result<ForegroundWindow, ForegroundError> {
+        let hwnd = unsafe { GetForegroundWindow() };
 
         if hwnd.0.is_null() {
-            return Err(
-                ForegroundError::NoForegroundWindow
-            );
+            return Err(ForegroundError::NoForegroundWindow);
         }
 
         let mut process_id = 0u32;
 
         unsafe {
-            GetWindowThreadProcessId(
-                hwnd,
-                Some(&mut process_id),
-            );
+            GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         }
 
         if process_id == 0 {
-            return Err(
-                ForegroundError::ProcessIdUnavailable
-            );
+            return Err(ForegroundError::ProcessIdUnavailable);
         }
 
         let process = unsafe {
             OpenProcess(
-                PROCESS_QUERY_INFORMATION
-                    | PROCESS_VM_READ,
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
                 false,
                 process_id,
             )
         }
-        .map_err(|_| {
-            ForegroundError::ProcessOpenFailed
-        })?;
+        .map_err(|_| ForegroundError::ProcessOpenFailed)?;
 
         let mut buffer = [0u16; 260];
 
-        let length = unsafe {
-            GetModuleFileNameExW(
-                Some(process),
-                None,
-                &mut buffer,
-            )
-        };
+        let length = unsafe { GetModuleFileNameExW(Some(process), None, &mut buffer) };
 
         if length == 0 {
-            return Err(
-                ForegroundError::ProcessNameUnavailable
-            );
+            return Err(ForegroundError::ProcessNameUnavailable);
         }
 
-        let process_name =
-            String::from_utf16_lossy(
-                &buffer[..length as usize],
-            );
+        let process_name = String::from_utf16_lossy(&buffer[..length as usize]);
 
         let process_name = process_name
             .rsplit(['\\', '/'])
@@ -132,10 +94,7 @@ impl WindowsForeground {
             .unwrap_or(&process_name)
             .to_string();
 
-        Ok(ForegroundWindow {
-            hwnd,
-            process_name,
-        })
+        Ok(ForegroundWindow { hwnd, process_name })
     }
 }
 

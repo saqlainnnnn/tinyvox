@@ -1,26 +1,15 @@
-pub mod injection;
 pub mod foreground;
+pub mod injection;
 
 pub mod credentials;
 
 pub mod overlay;
 
-pub use overlay::{
-    OverlayError,
-    WindowsOverlay,
-    OverlayState,
-};
+pub use overlay::{OverlayError, OverlayState, WindowsOverlay};
 
-pub use credentials::{
-    CredentialError,
-    WindowsCredentials,
-};
+pub use credentials::{CredentialError, WindowsCredentials};
 
-pub use foreground::{
-    ForegroundError,
-    ForegroundWindow,
-    WindowsForeground,
-};
+pub use foreground::{ForegroundError, ForegroundWindow, WindowsForeground};
 
 pub use injection::{InjectionError, WindowsTextInjector};
 
@@ -34,21 +23,9 @@ use windows::Win32::{
     Foundation::{LPARAM, LRESULT, WPARAM},
     System::Threading::GetCurrentThreadId,
     UI::WindowsAndMessaging::{
-        CallNextHookEx,
-        DispatchMessageW,
-        GetMessageW,
-        PeekMessageW,
-        PostThreadMessageW,
-        SetWindowsHookExW,
-        TranslateMessage,
-        UnhookWindowsHookEx,
-        KBDLLHOOKSTRUCT,
-        MSG,
-        PM_NOREMOVE,
-        WH_KEYBOARD_LL,
-        WM_APP,
-        WM_KEYDOWN,
-        WM_KEYUP,
+        CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
+        PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+        WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP,
     },
 };
 
@@ -77,30 +54,18 @@ pub enum HotkeyError {
 }
 
 impl std::fmt::Display for HotkeyError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HookInstallation(error) => {
-                write!(
-                    f,
-                    "failed to install keyboard hook: {error}"
-                )
+                write!(f, "failed to install keyboard hook: {error}")
             }
 
             Self::ThreadStartup => {
-                write!(
-                    f,
-                    "keyboard hook thread failed to start"
-                )
+                write!(f, "keyboard hook thread failed to start")
             }
 
             Self::ThreadDisconnected => {
-                write!(
-                    f,
-                    "keyboard hook thread disconnected"
-                )
+                write!(f, "keyboard hook thread disconnected")
             }
         }
     }
@@ -129,9 +94,7 @@ impl WindowsHotkey {
             Ok(Err(error)) => {
                 let _ = thread.join();
 
-                return Err(
-                    HotkeyError::HookInstallation(error)
-                );
+                return Err(HotkeyError::HookInstallation(error));
             }
 
             Err(_) => {
@@ -154,28 +117,19 @@ impl WindowsHotkey {
             .map_err(|_| HotkeyError::ThreadDisconnected)
     }
 
-    pub fn try_recv(
-        &self,
-    ) -> Result<Option<HotkeyEvent>, HotkeyError> {
+    pub fn try_recv(&self) -> Result<Option<HotkeyEvent>, HotkeyError> {
         match self.events.try_recv() {
             Ok(event) => Ok(Some(event)),
 
             Err(mpsc::TryRecvError::Empty) => Ok(None),
 
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Err(HotkeyError::ThreadDisconnected)
-            }
+            Err(mpsc::TryRecvError::Disconnected) => Err(HotkeyError::ThreadDisconnected),
         }
     }
 
     pub fn shutdown(&mut self) {
         unsafe {
-            let _ = PostThreadMessageW(
-                self.thread_id,
-                WM_TINYVOX_SHUTDOWN,
-                WPARAM(0),
-                LPARAM(0),
-            );
+            let _ = PostThreadMessageW(self.thread_id, WM_TINYVOX_SHUTDOWN, WPARAM(0), LPARAM(0));
         }
 
         if let Some(thread) = self.thread.take() {
@@ -202,27 +156,12 @@ fn hook_thread(
     let mut initial_message = MSG::default();
 
     unsafe {
-        let _ = PeekMessageW(
-            &mut initial_message,
-            None,
-            0,
-            0,
-            PM_NOREMOVE,
-        );
+        let _ = PeekMessageW(&mut initial_message, None, 0, 0, PM_NOREMOVE);
     }
 
-    let thread_id = unsafe {
-        GetCurrentThreadId()
-    };
+    let thread_id = unsafe { GetCurrentThreadId() };
 
-    let hook = match unsafe {
-        SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_hook),
-            None,
-            0,
-        )
-    } {
+    let hook = match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) } {
         Ok(hook) => hook,
 
         Err(error) => {
@@ -236,14 +175,7 @@ fn hook_thread(
     let mut message = MSG::default();
 
     loop {
-        let result = unsafe {
-            GetMessageW(
-                &mut message,
-                None,
-                0,
-                0,
-            )
-        };
+        let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
 
         if !result.as_bool() {
             break;
@@ -269,24 +201,16 @@ fn hook_thread(
     });
 }
 
-unsafe extern "system" fn keyboard_hook(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
-        let keyboard = unsafe {
-            &*(lparam.0 as *const KBDLLHOOKSTRUCT)
-        };
+        let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
 
         if keyboard.vkCode == VK_F9 {
             match wparam.0 as u32 {
                 WM_KEYDOWN => {
                     F9_DOWN.with(|down| {
                         if !down.replace(true) {
-                            send_event(
-                                HotkeyEvent::Pressed,
-                            );
+                            send_event(HotkeyEvent::Pressed);
                         }
                     });
                 }
@@ -294,9 +218,7 @@ unsafe extern "system" fn keyboard_hook(
                 WM_KEYUP => {
                     F9_DOWN.with(|down| {
                         if down.replace(false) {
-                            send_event(
-                                HotkeyEvent::Released,
-                            );
+                            send_event(HotkeyEvent::Released);
                         }
                     });
                 }
@@ -306,14 +228,7 @@ unsafe extern "system" fn keyboard_hook(
         }
     }
 
-    unsafe {
-        CallNextHookEx(
-            None,
-            code,
-            wparam,
-            lparam,
-        )
-    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 fn send_event(event: HotkeyEvent) {

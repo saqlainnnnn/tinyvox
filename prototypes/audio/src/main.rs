@@ -55,9 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config,
             move |data: &[i16], _| {
                 if let Ok(mut buffer) = samples_for_callback.lock() {
-                    buffer.extend(data.iter().map(|&sample| {
-                        sample as f32 / i16::MAX as f32
-                    }));
+                    buffer.extend(data.iter().map(|&sample| sample as f32 / i16::MAX as f32));
                 }
             },
             error_callback,
@@ -68,9 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config,
             move |data: &[u16], _| {
                 if let Ok(mut buffer) = samples_for_callback.lock() {
-                    buffer.extend(data.iter().map(|&sample| {
-                        (sample as f32 / u16::MAX as f32) * 2.0 - 1.0
-                    }));
+                    buffer.extend(
+                        data.iter()
+                            .map(|&sample| (sample as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                    );
                 }
             },
             error_callback,
@@ -107,11 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mono = downmix_to_mono(&captured, channels);
 
-    let resampled = resample_linear(
-        &mono,
-        sample_rate,
-        TARGET_SAMPLE_RATE,
-    );
+    let resampled = resample_linear(&mono, sample_rate, TARGET_SAMPLE_RATE);
 
     println!(
         "Resampled: {} samples ({:.2} seconds)",
@@ -133,17 +128,11 @@ fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
 
     samples
         .chunks_exact(channels as usize)
-        .map(|frame| {
-            frame.iter().copied().sum::<f32>() / channels as f32
-        })
+        .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
         .collect()
 }
 
-fn resample_linear(
-    samples: &[f32],
-    input_rate: u32,
-    output_rate: u32,
-) -> Vec<f32> {
+fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
     if samples.is_empty() || input_rate == output_rate {
         return samples.to_vec();
     }
@@ -170,8 +159,7 @@ fn resample_linear(
         let left = samples[left_index];
         let right = samples[right_index];
 
-        let interpolated =
-            left + (right - left) * fraction as f32;
+        let interpolated = left + (right - left) * fraction as f32;
 
         output.push(interpolated);
     }

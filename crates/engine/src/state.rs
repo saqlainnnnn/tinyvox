@@ -18,21 +18,13 @@ impl AppState {
         match (self, event) {
             (Self::Idle, AppEvent::RecordingStarted) => Some(Self::Recording),
 
-            (Self::Recording, AppEvent::RecordingStopped) => {
-                Some(Self::Transcribing)
-            }
+            (Self::Recording, AppEvent::RecordingStopped) => Some(Self::Transcribing),
 
-            (Self::Transcribing, AppEvent::TranscriptionCompleted) => {
-                Some(Self::Cleaning)
-            }
+            (Self::Transcribing, AppEvent::TranscriptionCompleted) => Some(Self::Cleaning),
 
-            (Self::Cleaning, AppEvent::CleanupCompleted) => {
-                Some(Self::Injecting)
-            }
+            (Self::Cleaning, AppEvent::CleanupCompleted) => Some(Self::Injecting),
 
-            (Self::Injecting, AppEvent::InjectionCompleted) => {
-                Some(Self::Idle)
-            }
+            (Self::Injecting, AppEvent::InjectionCompleted) => Some(Self::Idle),
 
             (_, AppEvent::Failed) => Some(Self::Idle),
 
@@ -50,38 +42,25 @@ mod tests {
     fn normal_dictation_flow() {
         let state = AppState::Idle;
 
-        let state = state
-            .transition(&AppEvent::RecordingStarted)
-            .unwrap();
+        let state = state.transition(&AppEvent::RecordingStarted).unwrap();
         assert_eq!(state, AppState::Recording);
 
-        let state = state
-            .transition(&AppEvent::RecordingStopped)
-            .unwrap();
+        let state = state.transition(&AppEvent::RecordingStopped).unwrap();
         assert_eq!(state, AppState::Transcribing);
 
-        let state = state
-            .transition(&AppEvent::TranscriptionCompleted)
-            .unwrap();
+        let state = state.transition(&AppEvent::TranscriptionCompleted).unwrap();
         assert_eq!(state, AppState::Cleaning);
 
-        let state = state
-            .transition(&AppEvent::CleanupCompleted)
-            .unwrap();
+        let state = state.transition(&AppEvent::CleanupCompleted).unwrap();
         assert_eq!(state, AppState::Injecting);
 
-        let state = state
-            .transition(&AppEvent::InjectionCompleted)
-            .unwrap();
+        let state = state.transition(&AppEvent::InjectionCompleted).unwrap();
         assert_eq!(state, AppState::Idle);
     }
 
     #[test]
     fn invalid_transition_is_rejected() {
-        assert_eq!(
-            AppState::Idle.transition(&AppEvent::RecordingStopped),
-            None
-        );
+        assert_eq!(AppState::Idle.transition(&AppEvent::RecordingStopped), None);
     }
 
     #[test]

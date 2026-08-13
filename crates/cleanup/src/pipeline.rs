@@ -1,10 +1,6 @@
 use std::convert::Infallible;
 
-use tinyvox_engine::ports::{
-    CleanedText,
-    TextCleaner,
-    Transcript,
-};
+use tinyvox_engine::ports::{CleanedText, TextCleaner, Transcript};
 
 use crate::validation::validate_cleaned_text;
 
@@ -15,40 +11,25 @@ pub enum CleanupError<PE, FE> {
     ValidationFailed,
 }
 
-impl<PE: std::fmt::Display, FE: std::fmt::Display>
-    std::fmt::Display for CleanupError<PE, FE>
-{
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+impl<PE: std::fmt::Display, FE: std::fmt::Display> std::fmt::Display for CleanupError<PE, FE> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Primary(error) => {
-                write!(
-                    f,
-                    "primary cleanup failed: {error}"
-                )
+                write!(f, "primary cleanup failed: {error}")
             }
 
             Self::Fallback(error) => {
-                write!(
-                    f,
-                    "fallback cleanup failed: {error}"
-                )
+                write!(f, "fallback cleanup failed: {error}")
             }
 
             Self::ValidationFailed => {
-                write!(
-                    f,
-                    "both cleanup outputs failed validation"
-                )
+                write!(f, "both cleanup outputs failed validation")
             }
         }
     }
 }
 
-impl<PE, FE> std::error::Error
-    for CleanupError<PE, FE>
+impl<PE, FE> std::error::Error for CleanupError<PE, FE>
 where
     PE: std::error::Error + 'static,
     FE: std::error::Error + 'static,
@@ -69,29 +50,13 @@ where
     P: TextCleaner,
     F: TextCleaner,
 {
-    pub fn new(
-        primary: P,
-        fallback: F,
-    ) -> Self {
-        Self {
-            primary,
-            fallback,
-        }
+    pub fn new(primary: P, fallback: F) -> Self {
+        Self { primary, fallback }
     }
 
-    pub async fn clean(
-        &self,
-        transcript: &Transcript,
-    ) -> CleanedText {
-        if let Ok(cleaned) =
-            self.primary.clean(transcript).await
-        {
-            if validate_cleaned_text(
-                transcript,
-                &cleaned,
-            )
-            .is_ok()
-            {
+    pub async fn clean(&self, transcript: &Transcript) -> CleanedText {
+        if let Ok(cleaned) = self.primary.clean(transcript).await {
+            if validate_cleaned_text(transcript, &cleaned).is_ok() {
                 println!("✓ Cleanup: primary");
                 return cleaned;
             }
@@ -101,25 +66,16 @@ where
             println!("⚠ Cleanup: primary failed");
         }
 
-        if let Ok(cleaned) =
-            self.fallback.clean(transcript).await
-        {
-            if validate_cleaned_text(
-                transcript,
-                &cleaned,
-            )
-            .is_ok()
-            {
+        if let Ok(cleaned) = self.fallback.clean(transcript).await {
+            if validate_cleaned_text(transcript, &cleaned).is_ok() {
                 println!("✓ Cleanup: llama fallback");
                 return cleaned;
             }
 
-            println!(
-            "⚠ Cleanup: llama failed validation"
-        );
-        }   else {
-        println!("⚠ Cleanup: llama unavailable/failed");
-    }
+            println!("⚠ Cleanup: llama failed validation");
+        } else {
+            println!("⚠ Cleanup: llama unavailable/failed");
+        }
 
         println!("→ Cleanup: raw transcript fallback");
         CleanedText {
@@ -138,12 +94,8 @@ where
     fn clean(
         &self,
         transcript: &Transcript,
-    ) -> impl std::future::Future<
-        Output = Result<CleanedText, Self::Error>,
-    > + Send {
-        async move {
-            Ok(self.clean(transcript).await)
-        }
+    ) -> impl std::future::Future<Output = Result<CleanedText, Self::Error>> + Send {
+        async move { Ok(self.clean(transcript).await) }
     }
 }
 
@@ -156,15 +108,9 @@ mod tests {
     impl TextCleaner for SuccessfulCleaner {
         type Error = &'static str;
 
-        async fn clean(
-            &self,
-            transcript: &Transcript,
-        ) -> Result<CleanedText, Self::Error> {
+        async fn clean(&self, transcript: &Transcript) -> Result<CleanedText, Self::Error> {
             Ok(CleanedText {
-                text: format!(
-                    "Cleaned: {}",
-                    transcript.text
-                ),
+                text: format!("Cleaned: {}", transcript.text),
             })
         }
     }
@@ -174,10 +120,7 @@ mod tests {
     impl TextCleaner for FailingCleaner {
         type Error = &'static str;
 
-        async fn clean(
-            &self,
-            _transcript: &Transcript,
-        ) -> Result<CleanedText, Self::Error> {
+        async fn clean(&self, _transcript: &Transcript) -> Result<CleanedText, Self::Error> {
             Err("cleanup failed")
         }
     }
@@ -187,10 +130,7 @@ mod tests {
     impl TextCleaner for InvalidCleaner {
         type Error = &'static str;
 
-        async fn clean(
-            &self,
-            _transcript: &Transcript,
-        ) -> Result<CleanedText, Self::Error> {
+        async fn clean(&self, _transcript: &Transcript) -> Result<CleanedText, Self::Error> {
             Ok(CleanedText {
                 text: String::new(),
             })
@@ -199,103 +139,66 @@ mod tests {
 
     #[tokio::test]
     async fn primary_success_is_used() {
-        let pipeline = CleanupPipeline::new(
-            SuccessfulCleaner,
-            FailingCleaner,
-        );
+        let pipeline = CleanupPipeline::new(SuccessfulCleaner, FailingCleaner);
 
         let transcript = Transcript {
             text: "hello".to_string(),
         };
 
-        let result =
-            pipeline.clean(&transcript).await;
+        let result = pipeline.clean(&transcript).await;
 
-        assert_eq!(
-            result.text,
-            "Cleaned: hello"
-        );
+        assert_eq!(result.text, "Cleaned: hello");
     }
 
     #[tokio::test]
     async fn failed_primary_uses_fallback() {
-        let pipeline = CleanupPipeline::new(
-            FailingCleaner,
-            SuccessfulCleaner,
-        );
+        let pipeline = CleanupPipeline::new(FailingCleaner, SuccessfulCleaner);
 
         let transcript = Transcript {
             text: "hello".to_string(),
         };
 
-        let result =
-            pipeline.clean(&transcript).await;
+        let result = pipeline.clean(&transcript).await;
 
-        assert_eq!(
-            result.text,
-            "Cleaned: hello"
-        );
+        assert_eq!(result.text, "Cleaned: hello");
     }
 
     #[tokio::test]
     async fn invalid_primary_uses_fallback() {
-        let pipeline = CleanupPipeline::new(
-            InvalidCleaner,
-            SuccessfulCleaner,
-        );
+        let pipeline = CleanupPipeline::new(InvalidCleaner, SuccessfulCleaner);
 
         let transcript = Transcript {
             text: "hello".to_string(),
         };
 
-        let result =
-            pipeline.clean(&transcript).await;
+        let result = pipeline.clean(&transcript).await;
 
-        assert_eq!(
-            result.text,
-            "Cleaned: hello"
-        );
+        assert_eq!(result.text, "Cleaned: hello");
     }
 
     #[tokio::test]
     async fn both_fail_returns_raw_transcript() {
-        let pipeline = CleanupPipeline::new(
-            FailingCleaner,
-            FailingCleaner,
-        );
+        let pipeline = CleanupPipeline::new(FailingCleaner, FailingCleaner);
 
         let transcript = Transcript {
-            text: "  hello from TinyVox  "
-                .to_string(),
+            text: "  hello from TinyVox  ".to_string(),
         };
 
-        let result =
-            pipeline.clean(&transcript).await;
+        let result = pipeline.clean(&transcript).await;
 
-        assert_eq!(
-            result.text,
-            "hello from TinyVox"
-        );
+        assert_eq!(result.text, "hello from TinyVox");
     }
 
     #[tokio::test]
     async fn invalid_primary_and_fallback_returns_raw_transcript() {
-        let pipeline = CleanupPipeline::new(
-            InvalidCleaner,
-            InvalidCleaner,
-        );
+        let pipeline = CleanupPipeline::new(InvalidCleaner, InvalidCleaner);
 
         let transcript = Transcript {
-            text: "  hello from TinyVox  "
-                .to_string(),
+            text: "  hello from TinyVox  ".to_string(),
         };
 
-        let result =
-            pipeline.clean(&transcript).await;
+        let result = pipeline.clean(&transcript).await;
 
-        assert_eq!(
-            result.text,
-            "hello from TinyVox"
-        );
+        assert_eq!(result.text, "hello from TinyVox");
     }
 }
